@@ -1,4 +1,4 @@
-import { Editor, type OverlayOptions, type TuiMode, visibleWidth } from "@earendil-works/pi-tui";
+import { Editor, Input, type OverlayOptions, ScrollView, type TuiMode, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../src/agent-manager.js";
 import { registerAgents } from "../src/agent-types.js";
@@ -131,7 +131,7 @@ function harness(
   let overlayDone: ((r: undefined) => void) | undefined;
   let overlayComponent: { handleInput(data: string): void } | undefined;
   let overlayOptions: OverlayOptions | undefined;
-  const fakeTui = { mode: opts.tuiMode ?? "regular", requestRender: () => {}, terminal: { columns: 120, rows: 40 } };
+  const fakeTui = { mode: opts.tuiMode ?? "regular", handleMouse: () => undefined, requestRender: () => {}, terminal: { columns: 120, rows: 40 } };
 
   const ui: FleetUICtx = {
     setWidget: (_key, content) => { widgetFactory = content as any; },
@@ -491,7 +491,12 @@ describe("FleetList rendering", () => {
 describe("FleetList overlay lifecycle", () => {
   it.each<{ mode: TuiMode; expected: OverlayOptions }>([
     { mode: "regular", expected: { anchor: "center", width: "90%", maxHeight: "70%" } },
-    { mode: "fullscreen", expected: { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0 } },
+    {
+      mode: "fullscreen",
+      expected: "handleMouse" in Input.prototype && "isScrollbarActive" in ScrollView.prototype
+        ? { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0 }
+        : { anchor: "center", width: "90%", maxHeight: "70%" },
+    },
   ])("opens the agent viewer with options for the active $mode TUI", async ({ mode, expected }) => {
     const h = harness([makeRecord()], { tuiMode: mode });
     try {

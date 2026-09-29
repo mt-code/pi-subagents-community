@@ -6,7 +6,7 @@
  */
 
 import { type AgentSession, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import { type Component, type Focusable, Input, Markdown, type MarkdownOptions, type MarkdownTheme, matchesKey, type OverlayOptions, ScrollView, type ScrollViewScrollbar, stripTerminalSequences, type TUI, type TuiMouseEvent, type TuiMouseEventResult, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { type Component, type Focusable, Input, Markdown, type MarkdownOptions, type MarkdownTheme, matchesKey, type OverlayOptions, ScrollView, type ScrollViewScrollbar, stripTerminalSequences, type TUI, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { renderAgentName } from "../agent-color.js";
 import { extractText } from "../context.js";
 import type { AgentRecord, ViewerMarkdownMode } from "../types.js";
@@ -15,14 +15,41 @@ import type { Theme } from "./agent-widget.js";
 import { type AgentActivity, buildInvocationTags, describeActivity, fgPreservingNestedStyles, formatCost, formatDuration, formatSessionTokens, getPromptModeLabel } from "./agent-widget.js";
 import { createViewerKeys, type ViewerKeybindings, type ViewerKeys } from "./viewer-keys.js";
 
-/** Header, header separator, footer separator, footer; regular mode adds two borders. */
-const CHROME_LINES_BASE = 4;
+/** Base lines consumed by chrome: top border + header + header sep + footer sep + footer + bottom border. */
+const CHROME_LINES_BASE = 6;
+const MIN_VIEWPORT = 3;
+/** Height ceiling shared by the overlay's `maxHeight` and the viewer's internal viewport cap. */
+export const VIEWPORT_HEIGHT_PCT = 70;
 const SCROLLBAR_WIDTH = 1;
-const VIEWPORT_HEIGHT_PCT = 70;
+
+// The mouse types are structural so this module also compiles against Pi 0.84.0,
+// which has ScrollView but no component mouse dispatch. Only newer hosts use them.
+interface ViewerMouseEvent {
+  type: "press" | "release" | "move" | "drag" | "click" | "wheel";
+  button: "left" | "middle" | "right" | "none";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  wheelDelta?: number;
+}
+interface ViewerMouseResult {
+  handled?: boolean;
+  capture?: boolean;
+  render?: boolean;
+}
+type MouseInput = Input & { handleMouse?: (event: ViewerMouseEvent) => unknown };
+
+function supportsFullscreenObserver(tui: Pick<TUI, "mode">): boolean {
+  return tui.mode === "fullscreen"
+    && "handleMouse" in tui && typeof tui.handleMouse === "function"
+    && typeof (Input.prototype as MouseInput).handleMouse === "function"
+    && "isScrollbarActive" in ScrollView.prototype;
+}
 
 /** Follow the active renderer, not a setting that may require a restart. */
 export function getConversationOverlayOptions(tui: Pick<TUI, "mode">): OverlayOptions {
-  return tui.mode === "fullscreen"
+  return supportsFullscreenObserver(tui)
     ? { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0 }
     : { anchor: "center", width: "90%", maxHeight: `${VIEWPORT_HEIGHT_PCT}%` };
 }
@@ -144,6 +171,8 @@ function truncationNote(elided: number): string {
 }
 
 export class ConversationViewer implements Component, Focusable {
+  private scrollOffset = 0;
+  private autoScroll = true;
   focused = false;
   private readonly fullscreen: boolean;
   private viewport: { width: number; top: number; height: number; maxScroll: number; thumbTop: number; thumbHeight: number } | undefined;
@@ -151,7 +180,7 @@ export class ConversationViewer implements Component, Focusable {
   private footerTargets: { start: number; end: number; key: string }[] = [];
   private latestTarget: { row: number; start: number; end: number } | undefined;
   private newMessages = 0;
-  private readonly scrollView: ScrollView;
+  private readonly scrollView: ScrollView & { readonly isScrollbarActive?: boolean };
   private unsubscribe: (() => void) | undefined;
   private lastInnerW = 0;
   private closed = false;
@@ -205,7 +234,7 @@ export class ConversationViewer implements Component, Focusable {
     /** Pi's fullscreen scrollbar preference, captured when the observer opens. */
     scrollbarMode: ScrollViewScrollbar = "auto",
   ) {
-    this.fullscreen = tui.mode === "fullscreen";
+    this.fullscreen = supportsFullscreenObserver(tui);
     this.markdownTheme = resolveMarkdownTheme(theme);
     this.keys = createViewerKeys(keybindings);
     this.scrollView = new ScrollView({
@@ -223,7 +252,7 @@ export class ConversationViewer implements Component, Focusable {
 
   handleInput(data: string): void {
     if (this.closed) return;
-    if ((this.fullscreen && matchesKey(data, "ctrl+end")) || (!this.composer && matchesKey(data, "end"))) {
+    if (this.fullscreen && (matchesKey(data, "ctrl+end") || (!this.composer && matchesKey(data, "end")))) {
       this.jumpToLatest();
       return;
     }
@@ -280,20 +309,37 @@ export class ConversationViewer implements Component, Focusable {
 
     const totalLines = this.buildContentLines(this.lastInnerW).length;
     const viewportHeight = this.viewportHeight();
-    this.scrollView.updateLayout(totalLines, viewportHeight, () => {
-      if (!this.closed) this.tui.requestRender();
-    });
+    if (this.fullscreen) {
+      this.scrollView.updateLayout(totalLines, viewportHeight, () => {
+        if (!this.closed) this.tui.requestRender();
+      });
+      if (this.keys.scrollUp(data)) this.scrollView.scrollBy(-1);
+      else if (this.keys.scrollDown(data)) this.scrollView.scrollBy(1);
+      else if (this.keys.pageUp(data)) this.scrollView.scrollBy(-viewportHeight);
+      else if (this.keys.pageDown(data)) this.scrollView.scrollBy(viewportHeight);
+      else if (matchesKey(data, "home")) this.scrollView.scrollToStart();
+      return;
+    }
+    const maxScroll = Math.max(0, totalLines - viewportHeight);
 
     if (this.keys.scrollUp(data)) {
-      this.scrollView.scrollBy(-1);
+      this.scrollOffset = Math.max(0, this.scrollOffset - 1);
+      this.autoScroll = this.scrollOffset >= maxScroll;
     } else if (this.keys.scrollDown(data)) {
-      this.scrollView.scrollBy(1);
+      this.scrollOffset = Math.min(maxScroll, this.scrollOffset + 1);
+      this.autoScroll = this.scrollOffset >= maxScroll;
     } else if (this.keys.pageUp(data)) {
-      this.scrollView.scrollTo(this.scrollView.scrollTop - viewportHeight, { disableFollow: !this.fullscreen });
+      this.scrollOffset = Math.max(0, this.scrollOffset - viewportHeight);
+      this.autoScroll = false;
     } else if (this.keys.pageDown(data)) {
-      this.scrollView.scrollBy(viewportHeight);
+      this.scrollOffset = Math.min(maxScroll, this.scrollOffset + viewportHeight);
+      this.autoScroll = this.scrollOffset >= maxScroll;
     } else if (matchesKey(data, "home")) {
-      this.scrollView.scrollTo(0, { disableFollow: !this.fullscreen });
+      this.scrollOffset = 0;
+      this.autoScroll = false;
+    } else if (matchesKey(data, "end")) {
+      this.scrollOffset = maxScroll;
+      this.autoScroll = true;
     }
   }
 
@@ -304,7 +350,7 @@ export class ConversationViewer implements Component, Focusable {
     this.tui.requestRender();
   }
 
-  handleMouse(event: TuiMouseEvent): TuiMouseEventResult {
+  handleMouse(event: ViewerMouseEvent): ViewerMouseResult {
     if (!this.fullscreen) return { handled: false };
     // Every cell belongs to this observer. Even unused clicks/drags must not
     // fall through to Pi's transcript selection, scrolling, or editor.
@@ -348,7 +394,7 @@ export class ConversationViewer implements Component, Focusable {
       }
       this.stopArmed = false;
       if (this.composer && event.y === this.tui.terminal.rows - 2) {
-        this.composer.handleMouse({ ...event, x: event.x - 1, y: 0, width: this.lastInnerW, height: 1 });
+        (this.composer as MouseInput).handleMouse?.({ ...event, x: event.x - 1, y: 0, width: this.lastInnerW, height: 1 });
         return { handled: true, render: true };
       }
       if (onScrollbar && view.maxScroll > 0) {
@@ -372,24 +418,30 @@ export class ConversationViewer implements Component, Focusable {
     this.latestTarget = undefined;
     this.viewport = undefined;
     const rows = Math.max(0, this.tui.terminal.rows);
-    if (!this.fullscreen && width < 6) return [];
+    if (!this.fullscreen && width < 6) return []; // too narrow for any meaningful rendering
     if (width <= SCROLLBAR_WIDTH + 1) return Array.from({ length: rows }, () => " ".repeat(Math.max(0, width)));
     const th = this.theme;
     const innerW = this.fullscreen ? this.scrollView.getContentWidth(width - 1) : width - 4;
     this.lastInnerW = innerW;
     const lines: string[] = [];
     const footerActions: { label: string; key: string }[] = [];
-    const row = (content: string, scrollbar?: string): string => {
-      if (!this.fullscreen) {
-        return th.fg("border", "│") + " " + truncateToWidth(content, innerW, "...", true) + " " + th.fg("border", "│");
-      }
-      const contentWidth = width - 1 - (scrollbar ? SCROLLBAR_WIDTH : 0);
-      return " " + truncateToWidth(content, contentWidth, scrollbar ? "" : "...", true) + (scrollbar ?? "");
+    const pad = (s: string, len: number) => {
+      const vis = visibleWidth(s);
+      return s + " ".repeat(Math.max(0, len - vis));
     };
+    const row = (content: string, scrollbar?: string): string => {
+      if (this.fullscreen) {
+        const contentWidth = width - 1 - (scrollbar ? SCROLLBAR_WIDTH : 0);
+        return " " + truncateToWidth(content, contentWidth, scrollbar ? "" : "...", true) + (scrollbar ?? "");
+      }
+      return th.fg("border", "│") + " " + truncateToWidth(pad(content, innerW), innerW, "...", true) + " " + th.fg("border", "│");
+    };
+    const hrTop = th.fg("border", `╭${"─".repeat(width - 2)}╮`);
+    const hrBot = th.fg("border", `╰${"─".repeat(width - 2)}╯`);
     const hrMid = row(th.fg("dim", "─".repeat(innerW)));
 
     // Header
-    if (!this.fullscreen) lines.push(th.fg("border", `╭${"─".repeat(width - 2)}╮`));
+    if (!this.fullscreen) lines.push(hrTop);
     const modeLabel = getPromptModeLabel(this.record.type);
     const modeTag = modeLabel ? ` ${th.fg("dim", `(${modeLabel})`)}` : "";
     const statusIcon = this.record.status === "running"
@@ -423,15 +475,19 @@ export class ConversationViewer implements Component, Focusable {
     lines.push(hrMid);
 
     // Content area — rebuild every render (live data, no cache needed)
-    const contentLines = this.scrollView.render(this.fullscreen ? width - 1 : innerW);
+    const contentLines = this.fullscreen ? this.scrollView.render(width - 1) : this.buildContentLines(innerW);
     const viewportHeight = this.viewportHeight();
     const maxScroll = Math.max(0, contentLines.length - viewportHeight);
-    this.scrollView.updateLayout(contentLines.length, viewportHeight, () => {
-      if (!this.closed) this.tui.requestRender();
-    });
-    if (this.scrollView.isFollowingEnd) this.newMessages = 0;
+    if (this.fullscreen) {
+      this.scrollView.updateLayout(contentLines.length, viewportHeight, () => {
+        if (!this.closed) this.tui.requestRender();
+      });
+      if (this.scrollView.isFollowingEnd) this.newMessages = 0;
+    } else if (this.autoScroll) {
+      this.scrollOffset = maxScroll;
+    }
 
-    const visibleStart = this.scrollView.scrollTop;
+    const visibleStart = this.fullscreen ? this.scrollView.scrollTop : Math.min(this.scrollOffset, maxScroll);
     const visible = contentLines.slice(visibleStart, visibleStart + viewportHeight);
     // Match Pi's scrollbar geometry: rounded size, at least two rows when available.
     const thumbHeight = Math.min(viewportHeight, Math.max(2, Math.round(viewportHeight * viewportHeight / Math.max(1, contentLines.length))));
@@ -506,7 +562,7 @@ export class ConversationViewer implements Component, Focusable {
       lines.push(row(footerLeft + " ".repeat(footerGap) + footerRight));
     }
     if (!this.fullscreen) {
-      lines.push(th.fg("border", `╰${"─".repeat(width - 2)}╯`));
+      lines.push(hrBot);
       return lines;
     }
     // Keep the footer on screen even in a terminal shorter than the chrome.
@@ -620,16 +676,16 @@ export class ConversationViewer implements Component, Focusable {
   // ---- Private ----
 
   private viewportHeight(): number {
-    if (!this.fullscreen) {
-      const maxRows = Math.floor(this.tui.terminal.rows * VIEWPORT_HEIGHT_PCT / 100);
-      return Math.max(3, maxRows - this.chromeLines());
-    }
-    return Math.max(0, this.tui.terminal.rows - this.chromeLines());
+    if (this.fullscreen) return Math.max(0, this.tui.terminal.rows - this.chromeLines());
+    // Cap mirrors the overlay's maxHeight — otherwise the viewer would render
+    // more lines than the overlay shows and clip the footer.
+    const maxRows = Math.floor((this.tui.terminal.rows * VIEWPORT_HEIGHT_PCT) / 100);
+    return Math.max(MIN_VIEWPORT, maxRows - this.chromeLines());
   }
 
   private chromeLines(): number {
     // The composer adds one row above the footer hint while it's open.
-    return CHROME_LINES_BASE + (this.fullscreen ? 0 : 2) + (this.invocationLine() ? 1 : 0) + (this.composer ? 1 : 0);
+    return CHROME_LINES_BASE - (this.fullscreen ? 2 : 0) + (this.invocationLine() ? 1 : 0) + (this.composer ? 1 : 0);
   }
 
   private invocationLine(): string | undefined {

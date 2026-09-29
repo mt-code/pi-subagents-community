@@ -1134,7 +1134,8 @@ export default function (pi: ExtensionAPI) {
   function setWidgetMode(m: WidgetMode): void { widgetMode = m; widget.update(); }
 
   // Claude Code-style FleetView: navigable list of main + subagents below the editor.
-  // Share viewer settings with `/agents`, reading Pi's scrollbar mode from the parent cwd.
+  // The last two arguments keep a conversation overlay opened here identical to
+  // one opened from `/agents`: same setting on the way in, same persist out.
   const fleet = new FleetList(manager, agentActivity, isShowCostEnabled, getViewerMarkdown,
     (mode) => chooseViewerMarkdown(mode, currentCtx as unknown as ExtensionCommandContext | undefined),
     () => currentCtx ? SettingsManager.create(currentCtx.cwd).getFullscreenScrollbar() : "auto");

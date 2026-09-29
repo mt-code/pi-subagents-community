@@ -54,8 +54,11 @@ export async function showWorkflowDialog(
   task: WorkflowTask,
   deps: WorkflowMenuDeps,
 ): Promise<void> {
-  // Keep the workflow inspector centered in both TUI modes. Only its child
-  // conversation observer fills the terminal in fullscreen mode.
+  // Overlaid on the same terms as the conversation viewer, because they are
+  // reached the same way: both are rows of the fleet list, and opening one
+  // must not behave unlike opening the other. Inline, the frame would render
+  // into the conversation and stay in the scrollback after it closed.
+  const { VIEWPORT_HEIGHT_PCT } = await import("./conversation-viewer.js");
   /**
    * This dialog's own overlay, so `c` can hide it while the conversation is
    * up. Overlays stack, so the viewer would render *over* it either way —
@@ -138,7 +141,7 @@ export async function showWorkflowDialog(
       ),
     {
       overlay: true,
-      overlayOptions: { anchor: "center", width: "90%", maxHeight: "70%" },
+      overlayOptions: { anchor: "center", width: "90%", maxHeight: `${VIEWPORT_HEIGHT_PCT}%` },
       onHandle: handle => { overlay = handle; },
     },
   );
