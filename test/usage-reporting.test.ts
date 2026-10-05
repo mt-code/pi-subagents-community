@@ -391,6 +391,45 @@ describe("reporting subagent usage back to the parent session", () => {
       expect(usageEvents(pi)).toHaveLength(0);
     });
 
+    it("carries the requested level when the agent did not get it", async () => {
+      // A workflow asking for `minimal` on a model whose lowest level is `low`
+      // runs at `low`; the ledger should be able to say so, not relabel it.
+      const { pi, tools } = boot({});
+      let spawned = false;
+      vi.mocked(runAgent).mockImplementation(async (_c: any, _t: any, _p: any, opts: any) => {
+        opts.onAssistantUsage?.({ input: 10, output: 5, cacheWrite: 0, cost: 0.001 });
+        if (!spawned) {
+          spawned = true;
+          const { manager, parentAgentId } = opts.nestedRuntime;
+          const childId = manager.spawn(pi, ctx(), "general-purpose", "sub", {
+            description: "clamped",
+            isBackground: false,
+            parentAgentId,
+            depth: 2,
+            invocation: { thinking: "low", requestedThinking: "minimal" },
+          });
+          await manager.getRecord(childId).promise;
+        }
+        return { responseText: "done", session: { dispose: vi.fn(), messages: [] } as any, aborted: false, steered: false };
+      });
+
+      await spawn(tools, "tc-1");
+
+      const events = usageEvents(pi);
+      expect(events.find((e: any) => e.description === "clamped")).toMatchObject({ thinking: "low", requestedThinking: "minimal" });
+      // An agent that got what it asked for carries no request.
+      expect(events.find((e: any) => e.description === "spend").requestedThinking).toBeUndefined();
+    });
+
+    it("announces subagents:disposed after shutdown has stopped every agent", async () => {
+      // A ledger's own session_shutdown can run before this extension aborts
+      // the agents; this is its signal that no more usage can arrive.
+      const { pi, lifecycle } = boot({});
+      await lifecycle.get("session_shutdown")?.({}, ctx());
+      const names = pi.events.emit.mock.calls.map((c: any[]) => c[0]);
+      expect(names.at(-1)).toBe("subagents:disposed");
+    });
+
     it("reports a nested child's message once, as the child's own", async () => {
       // The lifecycle events never fire for a nested child, and its spend is
       // double-booked into the ancestor records. A ledger summing this event

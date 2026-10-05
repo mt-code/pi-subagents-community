@@ -667,6 +667,10 @@ export default function (pi: ExtensionAPI) {
         description: record.description,
         model: record.invocation?.modelId,
         thinking: record.invocation?.thinking,
+        // Set only when the caller did not get the level it asked for (pi
+        // clamped it to the model, or an agent file outranked it), so a ledger
+        // can show `low (asked minimal)` instead of silently relabelling.
+        requestedThinking: record.invocation?.requestedThinking,
         depth: record.depth ?? 1,
         parentAgentId: record.parentAgentId,
         workflowId: record.workflowId,
@@ -1153,6 +1157,16 @@ export default function (pi: ExtensionAPI) {
     // pi awaits this handler, and the process exits right after — unawaited, those
     // handlers would never run. Internally bounded, so a hung one can't strand quit.
     await manager.dispose(pi);
+    // Every agent is stopped and every child session has shut down, so no more
+    // `subagents:usage` can arrive. A ledger flushing in its own
+    // `session_shutdown` may have run before this handler aborted the agents
+    // (handlers run in load order) and missed their last messages; this is the
+    // point after which a final flush is complete.
+    try {
+      pi.events.emit("subagents:disposed", {});
+    } catch {
+      // Stale runtime: nobody is left to hear it.
+    }
   });
 
   // Live widget: show running agents above editor.
