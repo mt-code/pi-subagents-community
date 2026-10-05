@@ -640,12 +640,43 @@ export default function (pi: ExtensionAPI) {
       tokensBefore: info.tokensBefore,
       compactionCount: record.compactionCount,
     });
-  }, (_record, usage) => {
+  }, (record, usage) => {
     // Every assistant message from every agent — nested included, exactly once.
     // Parked here until a tool result can carry it back to the parent session;
     // see `PendingUsagePool`. Skipped entirely when the feature is off, so no
     // pool grows in a session that will never drain it.
     if (reportUsage) pendingUsage.add(usage);
+    // The same message, live, for anyone keeping their own ledger — a footer
+    // that breaks spend down by agent type and thinking level, say. This is the
+    // one place every agent's spend passes through, which is why it is emitted
+    // here and not from the lifecycle events: those fire for top-level agents
+    // only, once, at the end, so a workflow's children and nested agents would
+    // never be counted, and a running agent would read as free until it
+    // stopped. Deliberately ungated by `reportUsage` — that decides whether the
+    // parent session's own totals include this spend, not whether it happened.
+    //
+    // `model` and `thinking` are read off the record per message, not captured
+    // at spawn: the record is authoritative only once the session exists and pi
+    // has clamped the level to the model (see `onSessionCreated`).
+    const reported = toReportedUsage(usage);
+    if (!reported) return;
+    try {
+      pi.events.emit("subagents:usage", {
+        id: record.id,
+        type: record.type,
+        description: record.description,
+        model: record.invocation?.modelId,
+        thinking: record.invocation?.thinking,
+        depth: record.depth ?? 1,
+        parentAgentId: record.parentAgentId,
+        workflowId: record.workflowId,
+        usage: reported,
+      });
+    } catch {
+      // A stale runtime after session replacement throws on emit. This runs
+      // inside the child's `message_end`, so throwing would hurt the agent to
+      // protect a display; drop the event instead.
+    }
   });
 
   // Expose manager via Symbol.for() global registry for cross-package access.
