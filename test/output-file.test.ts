@@ -160,7 +160,8 @@ describe("streamToOutputFile", () => {
 
   // ---- Compaction (#145): pi replaces session.messages with a shorter,
   // summarized array; streaming must survive it. Event sequences below mirror
-  // pi's real order of operations (verified against agent-session 0.80.6).
+  // pi's order of operations; output-file-compaction-e2e.test.ts drives the
+  // real one.
 
   it("resumes streaming after compaction shrinks the message array (#145)", async () => {
     const session = makeFakeSession([{ role: "user", content: "go" }]);

@@ -29,6 +29,13 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  fauxAssistantMessage,
+  fauxText,
+  getCurrentSystemPrompt,
+  getCurrentTools,
+  type TranscriptContext,
+} from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Real pi-mono session construction; a cold first run under full-suite CPU
@@ -51,6 +58,7 @@ vi.mock("@earendil-works/pi-coding-agent", async () => {
   };
 });
 
+import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { runMentionClone } from "../../src/mention-clone.js";
 import { fauxModelBackend } from "../helpers/faux-model-backend.js";
 import { registerFauxProvider } from "../helpers/pi-ai.js";
@@ -76,8 +84,8 @@ describe("mention clone tool reachability against real pi-mono", () => {
       cwd,
       model,
       getSystemPrompt: () => "PARENT",
-      // mention-clone reads the runtime off the registry facade, the same shim
-      // agent-runner carries for Pi >= 0.80.8.
+      // mention-clone reads the runtime off the registry facade's private
+      // field, as agent-runner does (see isolated-provider.e2e.test.ts).
       modelRegistry: { ...backend.modelRegistry, runtime: backend.modelRuntime },
       sessionManager: { getEntries: () => [], getLeafId: () => undefined },
     };
@@ -93,5 +101,54 @@ describe("mention clone tool reachability against real pi-mono", () => {
     expect(sessions).toHaveLength(1);
     // The bug this file exists for: with an empty allowlist this is `[]`.
     expect(sessions[0].getActiveToolNames()).toEqual(["Agent"]);
+  });
+
+  it("the clone's model sees the main conversation and the live system prompt", async () => {
+    // Since pi 0.87 the session manager, not `agent.state`, is what a request
+    // is built from. A clone that writes the conversation anywhere else starts
+    // its turn knowing nothing, and no mocked test can tell.
+    const model = faux.getModel();
+    const backend = fauxModelBackend(model);
+    const { session: main } = await createAgentSession({
+      cwd,
+      sessionManager: SessionManager.inMemory(cwd),
+      model,
+      modelRuntime: backend.modelRuntime,
+      tools: [],
+    } as any);
+
+    let seen: TranscriptContext | undefined;
+    faux.setResponses([
+      fauxAssistantMessage([fauxText("MAIN_REPLY")]),
+      (context) => {
+        seen = context;
+        return fauxAssistantMessage([fauxText("not calling it")]);
+      },
+    ]);
+    try {
+      await main.prompt("MAIN_USER_TURN");
+      const ctx: any = {
+        cwd,
+        model,
+        getSystemPrompt: () => "LIVE_PROMPT_MARKER",
+        modelRegistry: { ...backend.modelRegistry, runtime: backend.modelRuntime },
+        sessionManager: main.sessionManager,
+      };
+
+      // A real declaration: pi round-trips every tool's schema through JSON.
+      const agentTool = { name: "Agent", parameters: { type: "object", properties: {} } } as any;
+      await runMentionClone({ ctx, type: "Explore", message: "MENTION_TEXT", agentTool });
+
+      expect(seen).toBeDefined();
+      const text = JSON.stringify(seen?.messages.filter((m) => m.role !== "system"));
+      for (const marker of ["MAIN_USER_TURN", "MAIN_REPLY", "MENTION_TEXT"]) expect(text).toContain(marker);
+      const messages = seen?.messages ?? [];
+      // Exactly the live prompt: one that pi had rebuilt around it would carry
+      // its own sections (a second <cwd>, the default preamble) as well.
+      expect(getCurrentSystemPrompt(messages)).toBe("LIVE_PROMPT_MARKER");
+      expect(getCurrentTools(messages).map((t) => t.name)).toEqual(["Agent"]);
+    } finally {
+      main.dispose();
+    }
   });
 });

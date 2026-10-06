@@ -301,7 +301,7 @@ describe("agent-runner final output capture", () => {
     expect(vi.mocked(buildAgentPrompt).mock.lastCall![4]).not.toHaveProperty("workflowChild");
   });
 
-  it("passes the parent model runtime while retaining the legacy model registry", async () => {
+  it("passes the parent model runtime, and not the registry pi no longer takes", async () => {
     const { session } = createSession("AUTHENTICATED");
     createAgentSession.mockResolvedValue({ session });
     const modelRuntime = { getAuth: vi.fn(), hasConfiguredAuth: vi.fn() };
@@ -312,13 +312,11 @@ describe("agent-runner final output capture", () => {
 
     await runAgent(context, "Explore", "Say AUTHENTICATED", { pi });
 
-    expect(createAgentSession).toHaveBeenCalledWith(expect.objectContaining({
-      modelRegistry: context.modelRegistry,
-      modelRuntime,
-    }));
+    expect(createAgentSession).toHaveBeenCalledWith(expect.objectContaining({ modelRuntime }));
+    expect(createAgentSession.mock.calls[0][0]).not.toHaveProperty("modelRegistry");
   });
 
-  it("omits modelRuntime when the legacy registry does not expose one", async () => {
+  it("omits modelRuntime when the registry does not expose one", async () => {
     const { session } = createSession("LEGACY");
     createAgentSession.mockResolvedValue({ session });
 

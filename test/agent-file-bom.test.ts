@@ -2,12 +2,13 @@
  * agent-file-bom.test.ts — agent files that begin with a UTF-8 BOM.
  *
  * Editors across the Windows/CJK world write UTF-8 with a BOM by default, so a
- * BOM-prefixed agent file is ordinary input rather than a curiosity. pi's parser
- * did not look past one before 0.84.3: the fence never matched, so frontmatter
- * came back empty and the whole file — YAML included — became the body. An agent
- * authored that way lost every field, and `tools: none` going missing meant it
- * registered with the DEFAULT toolset (bash, edit, write) instead of none — a
- * wider grant than its author wrote.
+ * BOM-prefixed agent file is ordinary input rather than a curiosity. If the
+ * parser missed the fence behind one, frontmatter would come back empty and the
+ * whole file — YAML included — would become the body. An agent authored that
+ * way would lose every field, and `tools: none` going missing would register it
+ * with the DEFAULT toolset (bash, edit, write) instead of none — a wider grant
+ * than its author wrote. pi's own parser has looked past a BOM since 0.84.3, so
+ * these guard against that ever regressing.
  *
  * These drive the real loader over a real file, which is what the string-level
  * tests in custom-agents/agent-file-toggle cannot reach.

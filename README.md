@@ -1,4 +1,8 @@
-# @tintinweb/pi-subagents
+# @mt-code/pi-subagents-community
+
+This is a community maintained version of [@tintinweb/pi-subagents](https://github.com/tintinweb/pi-subagents). See [Community Features](https://github.com/mt-code/pi-subagents-community#community-features) for the latest community changes. 
+
+## pi-subagents
 
 A [pi](https://pi.dev) extension that brings **Claude Code-style autonomous sub-agents and workflow orchestration** to pi. Spawn specialized agents that run in isolated sessions — each with its own tools, system prompt, model, and thinking level. Run them in the background (the default) or block on them, steer them mid-run, resume completed sessions, and define your own custom agent types. When the orchestration shouldn't be improvised, hand a deterministic JavaScript script to the `SubagentWorkflow` tool — `agent()`, `parallel()`, `pipeline()` — and scripts written for Claude Code's `Workflow` tool run here unchanged.
 
@@ -9,8 +13,11 @@ https://github.com/user-attachments/assets/8685261b-9338-4fea-8dfe-1c590d5df543
 
 <img width="600" alt="pi-color-badges-white" src="https://github.com/user-attachments/assets/555dcae4-333e-4ff0-b420-7b3369c018a4" />
 
+## Community Features
 
-## Features
+- **Pi v1.0.0 Support** — added support for the official first version of Pi.
+
+## Original Features
 
 - **Claude Code look & feel** — same tool names, calling conventions, and UI patterns (`Agent`, `get_subagent_result`, `steer_subagent`) — feels native
 - **Parallel background agents** — spawn multiple agents that run concurrently with automatic queuing (configurable concurrency limit, default 10) and smart group join (consolidated notifications)
@@ -40,7 +47,7 @@ https://github.com/user-attachments/assets/8685261b-9338-4fea-8dfe-1c590d5df543
 ## Install
 
 ```bash
-pi install npm:@tintinweb/pi-subagents
+# npm package coming soon
 ```
 
 Or load directly for development:
@@ -49,7 +56,7 @@ Or load directly for development:
 pi -e ./src/index.ts
 ```
 
-Requires pi **0.84.0 or newer**: the [`SubagentWorkflow`](#subagentworkflow) tool builds on `constrainedSampling` (pi 0.82.0) and pi-tui's `stripTerminalSequences` (0.84.0). The `peerDependencies` range declares it, so npm flags an older pi at install time.
+Requires pi **1.0.0 or newer**.
 
 ### Other hosts
 

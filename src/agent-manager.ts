@@ -344,9 +344,7 @@ const CHILD_SHUTDOWN_TIMEOUT_MS = 3_000;
 async function shutdownChildSession(session: AgentSession | undefined): Promise<void> {
   try {
     const runner = session?.extensionRunner;
-    // Optional all the way down: on a pi without the getter, or a stubbed session from a
-    // partial `onSessionCreated`, skip the emit — the same degrade as before this fix.
-    if (runner?.hasHandlers?.("session_shutdown")) {
+    if (runner?.hasHandlers("session_shutdown")) {
       // Raced, not awaited outright. `emit` runs every handler serially with no timeout of
       // its own, and dispose() is reached from pi's own `session_shutdown` with the TUI
       // already torn down — one hung handler would leave a dead terminal.
@@ -355,9 +353,9 @@ async function shutdownChildSession(session: AgentSession | undefined): Promise<
         new Promise<void>(resolve => setTimeout(resolve, CHILD_SHUTDOWN_TIMEOUT_MS).unref()),
       ]);
     }
-  } catch { /* a partial session must degrade, not take the teardown down with it */ }
+  } catch { /* a failing shutdown handler must not take the teardown down with it */ }
   // Always, even on timeout: disposal is what this function ultimately exists to do.
-  try { session?.dispose?.(); } catch { /* ignore */ }
+  try { session?.dispose(); } catch { /* ignore */ }
 }
 
 export class AgentManager {
@@ -809,31 +807,21 @@ export class AgentManager {
         // path is the only thing that can reopen the conversation, and an
         // in-memory session reports undefined, which correctly means
         // "nothing to come back to".
-        // Optional chaining, not defensiveness for its own sake: this is the
-        // only field read off the session at creation, so an older pi or a
-        // stubbed session must degrade to "not resumable" rather than throw
-        // and take the whole spawn down with it.
-        record.sessionFile = session.sessionManager?.getSessionFile?.();
-        // Same reason, different field: the model and thinking level are only
-        // knowable once pi has resolved its defaults and clamped the level to
-        // what the model supports. Writing them back here makes the record
-        // authoritative, so every surface reads one place instead of each
-        // re-deriving "session, else the request" for itself.
+        record.sessionFile = session.sessionManager.getSessionFile();
+        // The model and thinking level are only knowable once pi has resolved
+        // its defaults and clamped the level to what the model supports.
+        // Writing them back here makes the record authoritative, so every
+        // surface reads one place instead of each re-deriving "session, else
+        // the request" for itself.
         if (session.model) {
           record.invocation ??= {};
           // Read the kept request first: a caller's level survives being clamped
           // AND, one line later, being replaced by the effective one.
           const requested = record.invocation.requestedThinking ?? record.invocation.thinking;
           Object.assign(record.invocation, describeModel(session.model));
-          // Guarded for the reason above: a session that reports no level keeps
-          // the request rather than losing it. Overwriting unconditionally would
-          // turn an older or stubbed session into a blank `thinking:` tag, which
-          // is worse than the stale-but-true value it replaced.
-          if (session.thinkingLevel) {
-            record.invocation.thinking = session.thinkingLevel;
-            if (requested && requested !== session.thinkingLevel) {
-              record.invocation.requestedThinking = requested;
-            }
+          record.invocation.thinking = session.thinkingLevel;
+          if (requested && requested !== session.thinkingLevel) {
+            record.invocation.requestedThinking = requested;
           }
         }
         // Flush any steers that arrived before the session was ready

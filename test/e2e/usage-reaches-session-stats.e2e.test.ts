@@ -20,19 +20,14 @@
  * `sessionManager.appendMessage`, because what is under test is the accounting,
  * not the streaming that would normally produce the message.
  *
- * This test is also what set the peer floor. Pi began folding `toolResult.usage`
- * into `getSessionStats()` in 0.81.0, when the computation moved to walking
- * session entries through `addUsageToTotals`; every 0.80.x sums assistant
- * messages alone and drops the field. Running unconditionally is the point —
- * against a Pi that does not aggregate, this fails rather than skipping, which
- * is how the range stays honest. `peerDependencies` moved to `>=0.81.0` for
- * exactly this reason, so the CI floor job runs it too. The floor has since moved
- * on past it (the Workflow tool needs 0.84.0), so this no longer pins the range's
- * lower edge — it still pins the behaviour that made 0.80.x unsupportable.
+ * Running unconditionally is the point: against a Pi that stopped folding
+ * `toolResult.usage` into `getSessionStats()`, this fails rather than
+ * skipping — the CI floor and latest-Pi jobs run it too.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PendingUsagePool } from "../../src/usage.js";
@@ -64,7 +59,6 @@ describe("subagent usage reaches the parent session's stats (real pi)", () => {
       cwd,
       sessionManager: SessionManager.inMemory(cwd),
       model: model as any,
-      modelRegistry: backend.modelRegistry,
       modelRuntime: backend.modelRuntime,
       tools: [],
     } as any);
@@ -115,22 +109,47 @@ describe("subagent usage reaches the parent session's stats (real pi)", () => {
   });
 
   it("leaves the context-window percentage alone", async () => {
-    // pi derives context usage from assistant messages only. If that ever
-    // changed, a delegating session would look like it was filling its context
-    // with work that happened somewhere else entirely — and users would compact
-    // for no reason.
-    const session = await realSession();
-    try {
-      const before = session.getSessionStats().contextUsage?.percent ?? null;
+    // pi derives context usage from the last assistant message's usage, plus a
+    // text estimate of the messages after it. A tool result's `usage` must
+    // never feed it: a delegating session would look like it was filling its
+    // context with work that happened somewhere else entirely — and users
+    // would compact for no reason.
+    //
+    // The sequence is the real one: the parent's tool-call turn, with usage of
+    // its own, then our result. The baseline is the same sequence with a result
+    // carrying no usage — the result's own text is estimated either way.
+    const CALL_TOKENS = 1000;
+    const percentAfter = async (resultUsage: unknown) => {
+      const session = await realSession();
+      try {
+        const call = fauxAssistantMessage([fauxToolCall("Agent", {}, { id: "tc-1" })], { stopReason: "toolUse" });
+        session.sessionManager.appendMessage({
+          ...call,
+          usage: {
+            input: CALL_TOKENS,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: CALL_TOKENS,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+        });
+        session.sessionManager.appendMessage(toolResultCarrying(resultUsage) as any);
+        return session.getSessionStats().contextUsage?.percent ?? null;
+      } finally {
+        session.dispose?.();
+      }
+    };
 
-      const pool = new PendingUsagePool();
-      pool.add({ input: 150_000, output: 400, cacheWrite: 100, cost: 1.5 });
-      session.sessionManager.appendMessage(toolResultCarrying(pool.drain()) as any);
+    const pool = new PendingUsagePool();
+    pool.add({ input: 150_000, output: 400, cacheWrite: 100, cost: 1.5 });
+    const withUsage = await percentAfter(pool.drain());
 
-      expect(session.getSessionStats().contextUsage?.percent ?? null).toBe(before);
-    } finally {
-      session.dispose?.();
-    }
+    expect(withUsage).toBe(await percentAfter(undefined));
+    // On the usage branch: the call's 1000 tokens (0.5% of 200k) plus a few
+    // estimated for the result's text — nowhere near the 75% ours would add.
+    expect(withUsage).toBeGreaterThan((CALL_TOKENS / 200_000) * 100);
+    expect(withUsage).toBeLessThan(0.6);
   });
 
   it("counts nothing for a tool result that carries no usage", async () => {

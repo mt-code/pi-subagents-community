@@ -53,8 +53,11 @@ import {
   fauxAssistantMessage,
   fauxText,
   fauxToolCall,
+  getCurrentSystemPrompt,
+  getCurrentTools,
   type Model,
   type ToolCall,
+  type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import {
   type AgentSession,
@@ -224,6 +227,19 @@ export function routeBySession(routes: {
   };
 }
 
+/**
+ * Pi 0.86 hands providers a `TranscriptContext`: the prompt and tool set ride in
+ * `role: "system"` messages instead of `systemPrompt`/`tools`. Responders are
+ * written against the flat `Context`, so replay the transcript into one.
+ */
+function toContext(transcript: TranscriptContext): Context {
+  return {
+    systemPrompt: getCurrentSystemPrompt(transcript.messages),
+    tools: getCurrentTools(transcript.messages),
+    messages: transcript.messages.filter((m) => m.role !== "system"),
+  };
+}
+
 /** Normalize any FauxReply into a faux AssistantMessage (tool calls ⇒ stopReason "toolUse"). */
 function toAssistantMessage(reply: FauxReply): AssistantMessage {
   if (reply && typeof reply === "object" && "role" in reply) {
@@ -278,7 +294,6 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
   // --- model backend ---
   let faux: ReturnType<typeof registerFauxProvider> | undefined;
   let model: Model<string> | undefined;
-  let modelRegistry: unknown;
   let modelRuntime: unknown;
   if (live) {
     // Explicit pin wins (options.live or PI_PROVIDER + PI_MODEL). Otherwise leave
@@ -292,8 +307,8 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
     const modelId = pin?.model ?? process.env.PI_MODEL;
     if (provider && modelId) {
       // getModel's overloads need the concrete provider literal; cast through.
-      // Since pi-ai 0.80 it is a static builtin-catalog lookup that returns
-      // undefined for unknown models — fail fast instead of letting
+      // It is a static builtin-catalog lookup that returns undefined for
+      // unknown models — fail fast instead of letting
       // createAgentSession silently substitute another model.
       model = (getModel as (p: string, m: string) => Model<string> | undefined)(provider, modelId);
       if (!model) {
@@ -302,8 +317,7 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
         );
       }
     }
-    // Let createAgentSession build the real, auth-backed registry/runtime.
-    modelRegistry = undefined;
+    // Let createAgentSession build the real, auth-backed runtime.
     modelRuntime = undefined;
   } else {
     if (!options.steps && !options.respond) {
@@ -311,10 +325,10 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
     }
     faux = registerFauxProvider({ provider: "faux", models: [{ id: "faux-1", contextWindow: 200_000 }] });
     model = faux.getModel();
-    // Structural faux registry + runtime (see faux-model-backend.ts): the parent
-    // session uses `model` directly; subagents inherit it via ctx.model since
+    // Structural faux runtime (see faux-model-backend.ts): the parent session
+    // uses `model` directly; subagents inherit it via ctx.model since
     // resolveDefaultModel falls back to the parent model when no model is pinned.
-    ({ modelRegistry, modelRuntime } = fauxModelBackend(model));
+    ({ modelRuntime } = fauxModelBackend(model));
 
     // Pad the response queue: one context-branching responder per expected model
     // call. The queue is a single FIFO shared by parent + child, but every entry
@@ -329,7 +343,7 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
       }
       const max = options.maxModelCalls ?? 16;
       const factory: FauxResponseStep = async (context, _opts, state) =>
-        toAssistantMessage(await respond(context, state));
+        toAssistantMessage(await respond(toContext(context), state));
       faux.setResponses(Array.from({ length: max }, () => factory));
     }
   }
@@ -357,8 +371,7 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
     cwd,
     agentDir,
     model,
-    // Structural faux registry/runtime in faux mode; undefined in live mode (defaults).
-    modelRegistry: modelRegistry as any,
+    // Structural faux runtime in faux mode; undefined in live mode (defaults).
     modelRuntime: modelRuntime as any,
     resourceLoader: loader,
     sessionManager: SessionManager.inMemory(cwd),

@@ -27,8 +27,7 @@
 
 import { existsSync } from "node:fs";
 import { join, sep } from "node:path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { parseAgentFrontmatter } from "./custom-agents.js";
+import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "./types.js";
 
 export type AgentFileLocation = "project" | "workspace" | "personal";
@@ -102,8 +101,8 @@ const FENCE = /^---[ \t]*$/;
 
 /**
  * Split a file into its frontmatter lines and everything else, agreeing with
- * what `parseAgentFrontmatter` (the load side) considers a frontmatter block —
- * including its BOM normalisation, which is why the fence test looks past one.
+ * what pi's `parseFrontmatter` (the load side) considers a frontmatter block —
+ * including that it looks past a leading BOM, which is why the fence test does.
  * The BOM itself stays in `lines[0]`: it belongs to the file's encoding, not to
  * the block, and an edit must not strip it from the user's file.
  *
@@ -139,7 +138,7 @@ function splitFrontmatter(content: string):
  */
 export function isDisabledContent(content: string): boolean {
   try {
-    return parseAgentFrontmatter<Record<string, unknown>>(content).frontmatter.enabled === false;
+    return parseFrontmatter<Record<string, unknown>>(content).frontmatter.enabled === false;
   } catch {
     return false;
   }

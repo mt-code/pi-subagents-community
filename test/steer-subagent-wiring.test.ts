@@ -37,6 +37,7 @@ function fakeSession(overrides: Record<string, unknown> = {}) {
   return {
     steer: vi.fn().mockResolvedValue(undefined),
     dispose: vi.fn(),
+    sessionManager: { getSessionFile: () => undefined },
     subscribe: vi.fn(() => () => {}),
     messages: [],
     getActiveToolNames: vi.fn(() => []),

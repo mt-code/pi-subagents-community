@@ -138,29 +138,4 @@ describe("child session shutdown (#242)", () => {
 
     expect(session.extensionRunner.emit).not.toHaveBeenCalled();
   });
-
-  it("degrades on a stubbed session instead of throwing", async () => {
-    const rejections: unknown[] = [];
-    const onRejection = (err: unknown) => rejections.push(err);
-    process.on("unhandledRejection", onRejection);
-    try {
-      manager = new AgentManager();
-      // No extensionRunner at all — an older pi, or a partial `onSessionCreated` stub.
-      const noRunner = { dispose: vi.fn() } as any;
-      await spawnCompleted(manager, noRunner);
-      manager.clearCompleted();
-      await vi.waitFor(() => expect(noRunner.dispose).toHaveBeenCalled());
-
-      // Nothing at all — not even dispose.
-      const empty = {} as any;
-      await spawnCompleted(manager, empty);
-      manager.clearCompleted();
-      await expect(manager.dispose()).resolves.toBeUndefined();
-
-      await new Promise(r => setImmediate(r));
-      expect(rejections).toEqual([]);
-    } finally {
-      process.off("unhandledRejection", onRejection);
-    }
-  });
 });

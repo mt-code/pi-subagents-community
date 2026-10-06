@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+> **⚠️ Breaking — requires pi 1.0.0 or newer** (`peerDependencies` moves from `>=0.84.0`). Upgrade pi before updating this extension.
+
+### Changed
+- **BREAKING: The pi peer floor moves from `>=0.84.0` to `>=1.0.0`, and the dev baseline to 1.0.4.** On pi 1.x every `@agent` mention clone threw (`agent.state.systemPrompt` is getter-only) and fell back to a direct start; and since pi 0.87.0 builds requests from the session manager, the conversation it pushed onto `agent.state` would not have reached the model either. The clone now seeds its in-memory session with the main session's entries, on the same leaf, and sends the live prompt verbatim through a `before_agent_start` override. Code that existed only for older pi is removed, including the `modelRegistry` session option and the agent-file BOM strip.
+
 ### Fixed
 - **The workflow stand-down now recognises a lowercase `workflow` tool** ([#283](https://github.com/tintinweb/pi-subagents/issues/283) — thanks [@zampierilucas](https://github.com/zampierilucas)). The match is exact on purpose, and the set held `Workflow` and `SubagentWorkflow` only, so `@quintinshaw/pi-dynamic-workflows` — which registers lowercase `workflow` — never tripped it: with `workflowsEnabled` unset, both orchestrators reached the model and nothing warned. Adding the third name is the whole fix; exactness is kept, so a `list_workflows` still cannot take the feature down.
 
