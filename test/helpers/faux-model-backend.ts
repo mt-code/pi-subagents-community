@@ -3,23 +3,20 @@
  * in one place.
  *
  * `registerFauxProvider` scripts the *responses*, but a session still has to get
- * past model lookup and auth before it streams anything, and where that check
- * lives moved with Pi 0.80.8:
- *   - Pi < 0.80.8: `createAgentSession({ modelRegistry })`, auth via
- *     `getApiKeyAndHeaders()`.
- *   - Pi >= 0.80.8: `createAgentSession({ modelRuntime })` — the registry option
- *     is gone entirely — auth via `getAuth()`/`hasConfiguredAuth()`, and the
- *     turn itself streams through `modelRuntime.streamSimple`.
+ * past model lookup and auth before it streams anything:
+ *   - `modelRuntime` is what `createAgentSession` takes: auth via
+ *     `getAuth()`/`hasConfiguredAuth()`, and the turn itself streams through
+ *     `modelRuntime.streamSimple`.
+ *   - `modelRegistry` stands in for `ctx.modelRegistry`, the facade extensions
+ *     see, for tests that hand a context to our code directly.
  *
- * The supported range is Pi >= 1.0.0, so sessions take `modelRuntime`; the
- * registry fake stands in for `ctx.modelRegistry`, the facade extensions see.
  * Structural fakes (not real instances) keep the suites hermetic — no
  * auth.json, no network, no local login state.
  */
 import type { Model } from "@earendil-works/pi-ai";
 import { streamSimple } from "./pi-ai.js";
 
-/** Both option shapes for `createAgentSession`, for the given faux model. */
+/** The session runtime and the extension-facing registry, for the given faux model. */
 export function fauxModelBackend(model: Model<string>): {
   modelRegistry: any;
   modelRuntime: any;
@@ -31,9 +28,8 @@ export function fauxModelBackend(model: Model<string>): {
       getAvailable: () => [model],
       hasConfiguredAuth: () => true,
       isUsingOAuth: () => false,
-      // createAgentSession's injected streamFn checks `auth.ok` and throws
-      // Error(auth.error) otherwise — so the `ok: true` flag is mandatory, not
-      // cosmetic. Without it the turn dies before streaming (empty error message).
+      // Mirrors ModelRegistry's ResolvedRequestAuth, where `ok` is the
+      // discriminant: without `ok: true` a caller reads it as a failure.
       getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "faux", headers: {} }),
       registerProvider: () => {},
       unregisterProvider: () => {},

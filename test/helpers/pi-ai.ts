@@ -1,7 +1,7 @@
 /**
- * pi-ai.ts — single import point for the two test helpers that pi-ai ≥0.80
- * exports only from the `/compat` subpath (all lived on the package root in
- * ≤0.75.x). Upstream deletes `/compat` with its coding-agent ModelManager
- * migration; the replacement then is `fauxProvider()` + `createModels()`.
+ * pi-ai.ts — single import point for the test helpers pi-ai exports only from
+ * its `/compat` subpath, the global-registry API. pi-ai marks that subpath
+ * temporary: it is deleted with the coding-agent ModelManager migration, and
+ * the replacement then is `fauxProvider()` + `createModels()`.
  */
 export { getModel, registerFauxProvider, streamSimple } from "@earendil-works/pi-ai/compat";

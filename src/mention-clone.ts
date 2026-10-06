@@ -161,7 +161,7 @@ export async function runMentionClone(opts: MentionCloneOptions): Promise<Mentio
     // factories load after discovered extensions, so this handler runs last
     // and its prompt is the one sent. Otherwise this is the loader
     // createAgentSession would build itself.
-    const systemPrompt = ctx.getSystemPrompt?.();
+    const systemPrompt = ctx.getSystemPrompt();
     const agentDir = getAgentDir();
     const settingsManager = SettingsManager.create(ctx.cwd, agentDir);
     const resourceLoader = new DefaultResourceLoader({

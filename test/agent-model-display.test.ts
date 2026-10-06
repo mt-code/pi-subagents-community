@@ -60,7 +60,12 @@ function ctx() {
 
 /** What a child session reports about itself once pi has resolved it. */
 function session(provider: string, id: string, thinkingLevel: string, name?: string) {
-  return { model: { provider, id, name: name ?? MODEL_NAMES[id] }, thinkingLevel, dispose: vi.fn() } as never;
+  return {
+    model: { provider, id, name: name ?? MODEL_NAMES[id] },
+    thinkingLevel,
+    dispose: vi.fn(),
+    sessionManager: { getSessionFile: () => undefined },
+  } as never;
 }
 
 const MODELS = [

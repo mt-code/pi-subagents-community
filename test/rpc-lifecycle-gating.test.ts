@@ -195,7 +195,7 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
     let onToolActivity: ((activity: { type: "start" | "end"; toolName: string }) => void) | undefined;
     vi.mocked(runAgent).mockImplementation((_ctx, _type, _prompt, options: any) => {
       onToolActivity = options.onToolActivity;
-      options.onSessionCreated?.({ subscribe: () => vi.fn() });
+      options.onSessionCreated?.({ subscribe: () => vi.fn(), sessionManager: { getSessionFile: () => undefined } });
       return new Promise(() => {}) as any;
     });
     subagentsExtension(pi);

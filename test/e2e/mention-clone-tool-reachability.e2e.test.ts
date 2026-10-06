@@ -84,8 +84,8 @@ describe("mention clone tool reachability against real pi-mono", () => {
       cwd,
       model,
       getSystemPrompt: () => "PARENT",
-      // mention-clone reads the runtime off the registry facade, the same shim
-      // agent-runner carries for Pi >= 0.80.8.
+      // mention-clone reads the runtime off the registry facade's private
+      // field, as agent-runner does (see isolated-provider.e2e.test.ts).
       modelRegistry: { ...backend.modelRegistry, runtime: backend.modelRuntime },
       sessionManager: { getEntries: () => [], getLeafId: () => undefined },
     };

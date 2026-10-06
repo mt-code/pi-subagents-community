@@ -20,10 +20,8 @@ jobs:
       - run: npm run typecheck
       - run: npm run test
 
-  # The pi devDependencies pin the compile baseline POST-migration (1.0.4), so the `build`
-  # job above is what guards the modelRegistry -> modelRuntime world: PR #152's
-  # isolated-provider test (test/e2e/isolated-provider.e2e.test.ts) skips itself on
-  # pre-migration Pi and now actually runs there.
+  # The pi devDependencies pin the compile baseline (1.0.4), which the `build` job above
+  # runs against.
   #
   # This job covers the other end: the earliest Pi the peerDependencies claim (`>=1.0.0`).
   # It is NOT continue-on-error — a green run here is the only evidence behind that range,

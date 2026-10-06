@@ -294,7 +294,6 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
   // --- model backend ---
   let faux: ReturnType<typeof registerFauxProvider> | undefined;
   let model: Model<string> | undefined;
-  let modelRegistry: unknown;
   let modelRuntime: unknown;
   if (live) {
     // Explicit pin wins (options.live or PI_PROVIDER + PI_MODEL). Otherwise leave
@@ -308,8 +307,8 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
     const modelId = pin?.model ?? process.env.PI_MODEL;
     if (provider && modelId) {
       // getModel's overloads need the concrete provider literal; cast through.
-      // Since pi-ai 0.80 it is a static builtin-catalog lookup that returns
-      // undefined for unknown models — fail fast instead of letting
+      // It is a static builtin-catalog lookup that returns undefined for
+      // unknown models — fail fast instead of letting
       // createAgentSession silently substitute another model.
       model = (getModel as (p: string, m: string) => Model<string> | undefined)(provider, modelId);
       if (!model) {
@@ -318,8 +317,7 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
         );
       }
     }
-    // Let createAgentSession build the real, auth-backed registry/runtime.
-    modelRegistry = undefined;
+    // Let createAgentSession build the real, auth-backed runtime.
     modelRuntime = undefined;
   } else {
     if (!options.steps && !options.respond) {
@@ -327,10 +325,10 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
     }
     faux = registerFauxProvider({ provider: "faux", models: [{ id: "faux-1", contextWindow: 200_000 }] });
     model = faux.getModel();
-    // Structural faux registry + runtime (see faux-model-backend.ts): the parent
-    // session uses `model` directly; subagents inherit it via ctx.model since
+    // Structural faux runtime (see faux-model-backend.ts): the parent session
+    // uses `model` directly; subagents inherit it via ctx.model since
     // resolveDefaultModel falls back to the parent model when no model is pinned.
-    ({ modelRegistry, modelRuntime } = fauxModelBackend(model));
+    ({ modelRuntime } = fauxModelBackend(model));
 
     // Pad the response queue: one context-branching responder per expected model
     // call. The queue is a single FIFO shared by parent + child, but every entry
@@ -373,8 +371,7 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
     cwd,
     agentDir,
     model,
-    // Structural faux registry/runtime in faux mode; undefined in live mode (defaults).
-    modelRegistry: modelRegistry as any,
+    // Structural faux runtime in faux mode; undefined in live mode (defaults).
     modelRuntime: modelRuntime as any,
     resourceLoader: loader,
     sessionManager: SessionManager.inMemory(cwd),

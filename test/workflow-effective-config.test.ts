@@ -73,7 +73,7 @@ function configCollector(into: Record<string, unknown>[]) {
  */
 function childSessionReports(session: { model?: unknown; thinkingLevel?: string }) {
   vi.mocked(runAgent).mockImplementation(async (_ctx: any, _type: any, _prompt: any, opts: any) => {
-    opts.onSessionCreated?.({ dispose: vi.fn(), ...session } as any);
+    opts.onSessionCreated?.({ dispose: vi.fn(), sessionManager: { getSessionFile: () => undefined }, ...session } as any);
     return { responseText: "done", session: { dispose: vi.fn() } as any, aborted: false, steered: false };
   });
 }

@@ -25,7 +25,7 @@ import { isWorktreeIsolationEnabled } from "../src/worktree.js";
 const mockPi = {} as any;
 const mockCtx = { cwd: "/tmp" } as any;
 
-const mockSession = () => ({ dispose: vi.fn() } as any);
+const mockSession = () => ({ dispose: vi.fn(), sessionManager: { getSessionFile: () => undefined } } as any);
 
 const resolvedRun = () =>
   vi.mocked(runAgent).mockResolvedValue({
@@ -1401,7 +1401,7 @@ describe("AgentManager — steer()", () => {
     });
     const id = manager.spawn(mockPi, mockCtx, "X", "p", { description: "r", isBackground: true });
     // Simulate the session becoming ready.
-    captured?.({ steer, dispose: vi.fn() });
+    captured?.({ ...mockSession(), steer });
 
     expect(manager.steer(id, "go left")).toBe(true);
     expect(steer).toHaveBeenCalledWith("go left");
@@ -1868,7 +1868,7 @@ describe("AgentManager — pendingSteers flush", () => {
     vi.mocked(runAgent).mockImplementation((_ctx: any, _type: any, _prompt: any, opts: any) =>
       new Promise<any>(resolve => {
         release = () => {
-          opts.onSessionCreated?.({ steer, dispose: vi.fn() });
+          opts.onSessionCreated?.({ ...mockSession(), steer });
           resolve({ responseText: "ok", session: mockSession(), aborted: false, steered: false });
         };
       }),
@@ -1896,7 +1896,7 @@ describe("AgentManager — pendingSteers flush", () => {
     vi.mocked(runAgent).mockImplementation((_ctx: any, _type: any, _prompt: any, opts: any) =>
       new Promise<any>(resolve => {
         release = () => {
-          opts.onSessionCreated?.({ steer, dispose: vi.fn() });
+          opts.onSessionCreated?.({ ...mockSession(), steer });
           resolve({ responseText: "ok", session: mockSession(), aborted: false, steered: false });
         };
       }),
@@ -2413,7 +2413,7 @@ describe("AgentManager — effective model and thinking write-back", () => {
     runtime: { model?: { provider: string; id: string; name?: string }; thinkingLevel?: string },
   ): Promise<AgentRecord> {
     vi.mocked(runAgent).mockImplementation(async (_ctx: any, _type: any, _prompt: any, options: any) => {
-      options.onSessionCreated?.({ dispose: vi.fn(), ...runtime });
+      options.onSessionCreated?.({ ...mockSession(), ...runtime });
       return { responseText: "done", session: mockSession(), aborted: false, steered: false } as any;
     });
     manager = new AgentManager();
@@ -2484,19 +2484,6 @@ describe("AgentManager — effective model and thinking write-back", () => {
       modelId: "openai-codex/gpt-5.6-sol",
       thinking: "xhigh",
     });
-  });
-
-  it("keeps the requested level when the session reports no level of its own", async () => {
-    // An older pi or a stubbed session degrades to "nothing to say about the
-    // level", which must not read as "no level" on every surface.
-    const record = await spawnWithSession(
-      { thinking: "max" },
-      { model: { provider: "anthropic", id: "claude-haiku-4-5" } },
-    );
-
-    expect(record.invocation!.thinking).toBe("max");
-    expect(record.invocation!.requestedThinking).toBeUndefined();
-    expect(record.invocation!.modelName).toBe("claude-haiku-4-5");
   });
 
   it("leaves the invocation alone when the session reports no model", async () => {

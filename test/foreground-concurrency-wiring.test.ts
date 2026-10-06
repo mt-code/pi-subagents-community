@@ -60,6 +60,7 @@ function controllableRuns() {
       new Promise<any>(resolve => {
         opts.onSessionCreated?.({
           dispose: vi.fn(),
+          sessionManager: { getSessionFile: () => undefined },
           subscribe: vi.fn(() => () => {}),
           messages: [],
           getActiveToolNames: vi.fn(() => []),

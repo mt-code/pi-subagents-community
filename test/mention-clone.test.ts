@@ -235,10 +235,10 @@ describe("cloning the conversation", () => {
     expect(loader.options.systemPromptOverride).toBeUndefined();
   });
 
-  it("leaves the rebuilt prompt alone when the context has none", async () => {
+  it("leaves the rebuilt prompt alone when the live one is empty", async () => {
     cloneSession(callsAgent());
 
-    await runMentionClone(opts({ ctx: mainCtx({ getSystemPrompt: undefined }) }));
+    await runMentionClone(opts({ ctx: mainCtx({ getSystemPrompt: vi.fn(() => "") }) }));
 
     expect(loaders[0].options.extensionFactories).toEqual([]);
   });
