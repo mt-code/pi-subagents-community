@@ -68,6 +68,8 @@ export function makePi(flags: Record<string, boolean | string> = {}): BootedPi {
       activeTools.length = 0;
       activeTools.push(...names);
     }),
+    // Pi's merged settings. Empty means every setting is at its default.
+    getSettings: vi.fn(() => ({})),
     appendEntry: vi.fn(),
     sendMessage: vi.fn(),
     exec: vi.fn(async () => ({ stdout: "", stderr: "", code: 0, killed: false })),
