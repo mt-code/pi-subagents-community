@@ -11,9 +11,10 @@
  *     is gone entirely — auth via `getAuth()`/`hasConfiguredAuth()`, and the
  *     turn itself streams through `modelRuntime.streamSimple`.
  *
- * Passing BOTH spans the supported range: each Pi ignores the option it no
- * longer knows. Structural fakes (not real instances) keep the suites hermetic —
- * no auth.json, no network, no local login state.
+ * The supported range is Pi >= 1.0.0, so sessions take `modelRuntime`; the
+ * registry fake stands in for `ctx.modelRegistry`, the facade extensions see.
+ * Structural fakes (not real instances) keep the suites hermetic — no
+ * auth.json, no network, no local login state.
  */
 import type { Model } from "@earendil-works/pi-ai";
 import { streamSimple } from "./pi-ai.js";

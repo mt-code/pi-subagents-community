@@ -53,8 +53,11 @@ import {
   fauxAssistantMessage,
   fauxText,
   fauxToolCall,
+  getCurrentSystemPrompt,
+  getCurrentTools,
   type Model,
   type ToolCall,
+  type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import {
   type AgentSession,
@@ -224,6 +227,19 @@ export function routeBySession(routes: {
   };
 }
 
+/**
+ * Pi 0.86 hands providers a `TranscriptContext`: the prompt and tool set ride in
+ * `role: "system"` messages instead of `systemPrompt`/`tools`. Responders are
+ * written against the flat `Context`, so replay the transcript into one.
+ */
+function toContext(transcript: TranscriptContext): Context {
+  return {
+    systemPrompt: getCurrentSystemPrompt(transcript.messages),
+    tools: getCurrentTools(transcript.messages),
+    messages: transcript.messages.filter((m) => m.role !== "system"),
+  };
+}
+
 /** Normalize any FauxReply into a faux AssistantMessage (tool calls ⇒ stopReason "toolUse"). */
 function toAssistantMessage(reply: FauxReply): AssistantMessage {
   if (reply && typeof reply === "object" && "role" in reply) {
@@ -329,7 +345,7 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
       }
       const max = options.maxModelCalls ?? 16;
       const factory: FauxResponseStep = async (context, _opts, state) =>
-        toAssistantMessage(await respond(context, state));
+        toAssistantMessage(await respond(toContext(context), state));
       faux.setResponses(Array.from({ length: max }, () => factory));
     }
   }
