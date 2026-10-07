@@ -287,6 +287,31 @@ describe("fullscreen conversation observer", () => {
     expect(unsubscribe).toHaveBeenCalledOnce();
   });
 
+  it("does not route clicks to a composer row cut from a short terminal", () => {
+    const { viewer, render, terminal, mouse } = setup(4, 100);
+    viewer.handleInput("\r");
+    viewer.handleInput("abc");
+    const lines = render();
+    expect(lines.join("\n")).not.toContain("> abc"); // composer row was cut
+    mouse({ type: "press", button: "left", x: 1, y: terminal.rows - 2 }); // where it used to be
+    mouse({ type: "press", button: "left", x: 1, y: terminal.rows - 1 }); // footer, off its hint
+    viewer.handleInput("!");
+    terminal.rows = 20;
+    expect(render().join("\n")).toContain("abc!");
+    viewer.dispose();
+  });
+
+  it("does not click a footer action that truncation cut short", () => {
+    const { viewer, render, done } = setup(20, 70);
+    const footer = render().at(-1) ?? "";
+    expect(footer).not.toContain("Esc close");
+    const x = footer.indexOf("Es");
+    expect(x).toBeGreaterThan(0);
+    viewer.handleMouse({ type: "press", button: "left", x, y: 19, screenX: x, screenY: 19, width: 70, height: 20, shift: false, alt: false, ctrl: false });
+    expect(done).not.toHaveBeenCalled();
+    viewer.dispose();
+  });
+
   it("keeps two-step stop confirmation and disarms it on wheel input", () => {
     const { click, mouse, stop } = setup();
     click("x stop");

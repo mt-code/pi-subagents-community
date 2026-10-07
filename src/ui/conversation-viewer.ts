@@ -6,7 +6,7 @@
  */
 
 import { type AgentSession, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import { type Component, type Focusable, Input, Markdown, type MarkdownOptions, type MarkdownTheme, matchesKey, type OverlayOptions, ScrollView, type ScrollViewScrollbar, stripTerminalSequences, type TUI, type TuiMouseEvent, type TuiMouseEventResult, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { type Component, type Focusable, Input, Markdown, type MarkdownOptions, type MarkdownTheme, matchesKey, type OverlayOptions, ScrollView, type ScrollViewScrollbar, type TUI, type TuiMouseEvent, type TuiMouseEventResult, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { renderAgentName } from "../agent-color.js";
 import { extractText } from "../context.js";
 import type { AgentRecord, ViewerMarkdownMode } from "../types.js";
@@ -21,6 +21,10 @@ const MIN_VIEWPORT = 3;
 /** Height ceiling shared by the overlay's `maxHeight` and the viewer's internal viewport cap. */
 export const VIEWPORT_HEIGHT_PCT = 70;
 const SCROLLBAR_WIDTH = 1;
+
+/** What a click on a recorded span does: send a key, jump to the end, or place the composer cursor. */
+type HitAction = { key: string } | { latest: true } | { composer: true };
+interface HitTarget { row: number; start: number; end: number; action: HitAction }
 
 /** Follow the active renderer, not a setting that may require a restart. */
 export function getConversationOverlayOptions(tui: Pick<TUI, "mode">): OverlayOptions {
@@ -152,8 +156,8 @@ export class ConversationViewer implements Component, Focusable {
   private readonly fullscreen: boolean;
   private viewport: { width: number; top: number; height: number; maxScroll: number; thumbTop: number; thumbHeight: number } | undefined;
   private scrollbarGrabOffset: number | undefined;
-  private footerTargets: { start: number; end: number; key: string }[] = [];
-  private latestTarget: { row: number; start: number; end: number } | undefined;
+  /** Clickable spans recorded by the last fullscreen render, in screen cells. */
+  private hitTargets: HitTarget[] = [];
   private newMessages = 0;
   private readonly scrollView: ScrollView;
   private unsubscribe: (() => void) | undefined;
@@ -356,20 +360,18 @@ export class ConversationViewer implements Component, Focusable {
     if (event.type === "press" && event.button === "left") {
       this.scrollbarGrabOffset = undefined;
       this.scrollView.setScrollbarActive(onScrollbar);
-      if (this.latestTarget && event.y === this.latestTarget.row && event.x >= this.latestTarget.start && event.x < this.latestTarget.end) {
+      const hit = this.hitTargets.find(t => t.row === event.y && event.x >= t.start && event.x < t.end);
+      if (hit && "key" in hit.action) {
+        this.handleInput(hit.action.key);
+        return { handled: true, render: true };
+      }
+      this.stopArmed = false;
+      if (hit && "latest" in hit.action) {
         this.jumpToLatest();
         return { handled: true, render: true };
       }
-      if (event.y === this.tui.terminal.rows - 1) {
-        const target = this.footerTargets.find(t => event.x >= t.start && event.x < t.end);
-        if (target) {
-          this.handleInput(target.key);
-          return { handled: true, render: true };
-        }
-      }
-      this.stopArmed = false;
-      if (this.composer && event.y === this.tui.terminal.rows - 2) {
-        this.composer.handleMouse({ ...event, x: event.x - 1, y: 0, width: this.lastInnerW, height: 1 });
+      if (hit && this.composer) {
+        this.composer.handleMouse({ ...event, x: event.x - hit.start, y: 0, width: this.lastInnerW, height: 1 });
         return { handled: true, render: true };
       }
       if (onScrollbar && view.maxScroll > 0) {
@@ -389,8 +391,7 @@ export class ConversationViewer implements Component, Focusable {
   }
 
   render(width: number): string[] {
-    this.footerTargets = [];
-    this.latestTarget = undefined;
+    this.hitTargets = [];
     this.viewport = undefined;
     const rows = Math.max(0, this.tui.terminal.rows);
     if (!this.fullscreen && width < 6) return []; // too narrow for any meaningful rendering
@@ -399,7 +400,6 @@ export class ConversationViewer implements Component, Focusable {
     const innerW = this.fullscreen ? this.scrollView.getContentWidth(width - 1) : width - 4;
     this.lastInnerW = innerW;
     const lines: string[] = [];
-    const footerActions: { label: string; key: string }[] = [];
     const pad = (s: string, len: number) => {
       const vis = visibleWidth(s);
       return s + " ".repeat(Math.max(0, len - vis));
@@ -410,6 +410,15 @@ export class ConversationViewer implements Component, Focusable {
         return " " + truncateToWidth(content, contentWidth, scrollbar ? "" : "...", true) + (scrollbar ?? "");
       }
       return th.fg("border", "│") + " " + truncateToWidth(pad(content, innerW), innerW, "...", true) + " " + th.fg("border", "│");
+    };
+    // Record a clickable span of `content` as `row()` will place it: one cell in,
+    // and only if truncation leaves the whole span ahead of the "...".
+    const addTarget = (rowIndex: number, start: number, text: string, action: HitAction, content: string): void => {
+      if (!this.fullscreen) return;
+      const contentWidth = visibleWidth(content);
+      const limit = 1 + (contentWidth <= width - 1 ? contentWidth : width - 4);
+      const end = 1 + start + visibleWidth(text);
+      if (end <= limit) this.hitTargets.push({ row: rowIndex, start: 1 + start, end, action });
     };
     const hrTop = th.fg("border", `╭${"─".repeat(width - 2)}╮`);
     const hrBot = th.fg("border", `╰${"─".repeat(width - 2)}╯`);
@@ -491,25 +500,32 @@ export class ConversationViewer implements Component, Focusable {
       const label = truncateToWidth(`[ ↓ ${text} · Ctrl+End ]`, innerW, "…");
       const labelWidth = visibleWidth(label);
       const padding = Math.floor((innerW - labelWidth) / 2);
-      this.latestTarget = { row: lines.length, start: padding + 1, end: padding + 1 + labelWidth };
-      lines.push(row(th.fg("dim", "─".repeat(padding)) + th.fg("accent", label) + th.fg("dim", "─".repeat(innerW - padding - labelWidth))));
+      const divider = th.fg("dim", "─".repeat(padding)) + th.fg("accent", label) + th.fg("dim", "─".repeat(innerW - padding - labelWidth));
+      addTarget(lines.length, padding, label, { latest: true }, divider);
+      lines.push(row(divider));
     } else {
       lines.push(hrMid);
     }
     if (this.composer) {
       // Composer row: the Input renders its own `> ` prompt and cursor.
       this.composer.focused = this.focused;
+      const composerRow = " ".repeat(innerW);
+      addTarget(lines.length, 0, composerRow, { composer: true }, composerRow);
       lines.push(row(this.composer.render(innerW)[0] ?? ""));
-      footerActions.push({ label: "Enter send", key: "\r" }, { label: "Esc cancel", key: "\x1b" });
       const composeHint = th.fg("dim", "Enter send · Esc cancel");
       const composeLeft = th.fg("accent", "✎ steer");
       const composeGap = Math.max(1, innerW - visibleWidth(composeLeft) - visibleWidth(composeHint));
-      lines.push(row(composeLeft + " ".repeat(composeGap) + composeHint));
+      const composeLine = composeLeft + " ".repeat(composeGap) + composeHint;
+      const hintStart = visibleWidth(composeLeft) + composeGap;
+      addTarget(lines.length, hintStart, "Enter send", { key: "\r" }, composeLine);
+      addTarget(lines.length, hintStart + visibleWidth("Enter send · "), "Esc cancel", { key: "\x1b" }, composeLine);
+      lines.push(row(composeLine));
     } else {
       // Actions on the left, navigation on the right. The scroll hint keeps its
       // full key list so the less-obvious bindings stay discoverable; it leads
       // the right group so "Esc close" is the only part that truncates first.
       const sep = th.fg("dim", " · ");
+      const footerActions: { label: string; key: string }[] = [];
       if (this.canSteer()) footerActions.push({ label: "Enter steer", key: "\r" });
       if (this.isStoppable()) {
         footerActions.push({ label: this.stopArmed ? "x again to STOP" : "x stop", key: "x" });
@@ -519,7 +535,6 @@ export class ConversationViewer implements Component, Focusable {
       // degradation step below "drop the line-count readout".
       footerActions.push({ label: `m ${MARKDOWN_MODE_LABELS[this.markdownMode()]}`, key: "m" });
       const actions = footerActions.map(a => th.fg(a.key === "x" && this.stopArmed ? "error" : "dim", a.label));
-      footerActions.push({ label: "Esc close", key: "\x1b" });
       const footerRight = th.fg("dim", "↑↓ scroll · PgUp/PgDn or Shift+↑↓ · Esc close");
 
       // Prepend the line-count/scroll-% readout only when there's spare width —
@@ -529,27 +544,33 @@ export class ConversationViewer implements Component, Focusable {
         : `${Math.round(((visibleStart + viewportHeight) / contentLines.length) * 100)}%`;
       const count = th.fg("dim", `${contentLines.length} lines · ${scrollPct}`);
       const withCount = [count, ...actions].join(sep);
-      const footerLeft = visibleWidth(withCount) + visibleWidth(footerRight) + 1 <= innerW
-        ? withCount
-        : actions.join(sep);
+      const showCount = visibleWidth(withCount) + visibleWidth(footerRight) + 1 <= innerW;
+      const footerLeft = showCount ? withCount : actions.join(sep);
 
       const footerGap = Math.max(1, innerW - visibleWidth(footerLeft) - visibleWidth(footerRight));
-      lines.push(row(footerLeft + " ".repeat(footerGap) + footerRight));
+      const footerLine = footerLeft + " ".repeat(footerGap) + footerRight;
+      // Each action's column comes from the segments before it, never from searching the text.
+      let col = showCount ? visibleWidth(count) + visibleWidth(sep) : 0;
+      for (const action of footerActions) {
+        addTarget(lines.length, col, action.label, { key: action.key }, footerLine);
+        col += visibleWidth(action.label) + visibleWidth(sep);
+      }
+      // "Esc close" ends the right-hand hint.
+      addTarget(lines.length, visibleWidth(footerLine) - visibleWidth("Esc close"), "Esc close", { key: "\x1b" }, footerLine);
+      lines.push(row(footerLine));
     }
     if (!this.fullscreen) {
       lines.push(hrBot);
       return lines;
     }
-    // Keep the footer on screen even in a terminal shorter than the chrome.
+    // Keep the footer on screen even in a terminal shorter than the chrome. Its
+    // targets move with it; targets on rows that were cut stop being clickable.
+    const footerRow = lines.length - 1;
     const footer = lines.pop() ?? row("");
     const output = rows > 0 ? [...lines.slice(0, rows - 1), footer] : [];
-    const footerText = stripTerminalSequences(footer);
-    for (const action of footerActions) {
-      const index = footerText.indexOf(action.label);
-      if (index < 0) continue; // a clipped label is not a clickable control
-      const start = visibleWidth(footerText.slice(0, index));
-      this.footerTargets.push({ start, end: start + visibleWidth(action.label), key: action.key });
-    }
+    const lastRow = output.length - 1;
+    this.hitTargets = this.hitTargets.flatMap(t =>
+      t.row === footerRow ? (lastRow >= 0 ? [{ ...t, row: lastRow }] : []) : t.row < lastRow ? [t] : []);
     return output;
   }
 
