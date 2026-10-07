@@ -45,7 +45,7 @@ vi.mock("@earendil-works/pi-tui", async (importOriginal) => {
 // After the mock, so the subjects bind the counting versions.
 const { AgentWidget } = await import("../../src/ui/agent-widget.js");
 const { ConversationViewer } = await import("../../src/ui/conversation-viewer.js");
-const { makeActivity, makeFleet, makeSession, mountViewer, perfTheme, perfTui } = await import(
+const { makeActivity, makeFleet, makeSession, makeStreamingSession, mountViewer, perfTheme, perfTui } = await import(
   "../helpers/perf-fixtures.js"
 );
 
@@ -56,10 +56,15 @@ beforeEach(() => {
 });
 
 describe("ConversationViewer — cost stays linear in transcript length", () => {
-  /** Leaf calls one render makes over a transcript of `n` messages. */
-  function wrapsFor(n: number, mode: string): number {
-    const viewer = mountViewer(ConversationViewer, makeSession(n), undefined, () => mode);
+  /**
+   * Leaf calls one render makes over a transcript of `n` messages after a
+   * session event — the rebuild every streamed token pays. Without the event
+   * the cached transcript is reused and the render does no leaf work at all.
+   */
+  function wrapsFor(n: number, mode: string, session = makeSession(n)): number {
+    const viewer = mountViewer(ConversationViewer, session, undefined, () => mode);
     viewer.render(120); // prime, so caches are warm and only steady state counts
+    session.emit();
     counts.wrap = 0;
     counts.markdownRender = 0;
     viewer.render(120);
@@ -84,6 +89,56 @@ describe("ConversationViewer — cost stays linear in transcript length", () => 
 
     expect(small).toBeGreaterThan(0);
     expect(large / small).toBeLessThanOrEqual(11);
+  });
+
+  it("does ~10x the work for 10x the messages while a thinking block streams", () => {
+    const small = wrapsFor(30, "assistant", makeStreamingSession(30, { thinkingChars: 2_000 }));
+    const large = wrapsFor(300, "assistant", makeStreamingSession(300, { thinkingChars: 2_000 }));
+
+    expect(small).toBeGreaterThan(0);
+    expect(large / small).toBeLessThanOrEqual(11);
+  });
+
+  // The Thinking spinner redraws every 80 ms. If a frame with no session event
+  // rebuilt the transcript, a thinking agent with 5000 messages would hold a
+  // core for as long as it thinks.
+  it("a frame with no session event does no transcript work", () => {
+    const activity = { activeTools: new Map(), toolUses: 0, turnCount: 1, responseText: "" };
+    const viewer = mountViewer(ConversationViewer, makeStreamingSession(300, { thinkingChars: 2_000 }), undefined, () => "assistant", undefined, { activity });
+    viewer.render(120);
+    counts.wrap = 0;
+    counts.markdownRender = 0;
+
+    viewer.render(120);
+    viewer.render(120);
+
+    expect(counts.wrap + counts.markdownRender).toBe(0);
+  });
+
+  it("a streamed thinking delta re-parses its block rather than building a new one", () => {
+    const session = makeStreamingSession(30, { thinkingChars: 2_000 });
+    const viewer = mountViewer(ConversationViewer, session, undefined, () => "assistant");
+    viewer.render(120);
+    const afterFirst = counts.markdownNew;
+
+    for (let i = 0; i < 10; i++) {
+      session.delta(i);
+      session.emit();
+      viewer.render(120);
+    }
+
+    expect(counts.markdownNew).toBe(afterFirst);
+  });
+
+  it("hidden thinking builds no Markdown for the thinking block", () => {
+    const built = (session: any, hideThinking: boolean) => {
+      counts.markdownNew = 0;
+      mountViewer(ConversationViewer, session, undefined, () => "assistant", undefined, { hideThinking }).render(120);
+      return counts.markdownNew;
+    };
+
+    expect(built(makeStreamingSession(30, { thinkingChars: 100_000 }), true))
+      .toBeLessThanOrEqual(built(makeStreamingSession(30, {}), false));
   });
 
   // #259's WeakMap is keyed by the message object. If a refactor ever rebuilds

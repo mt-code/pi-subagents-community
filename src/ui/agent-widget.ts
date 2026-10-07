@@ -20,6 +20,9 @@ const MAX_WIDGET_LINES = 12;
 /** Braille spinner frames for animated running indicator. */
 export const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+/** Activity label while the model is producing no text and running no tools. */
+export const THINKING_LABEL = "Thinking";
+
 /** Statuses that indicate an error/non-success outcome (used for linger behavior and icon rendering). */
 export const ERROR_STATUSES = new Set(["error", "aborted", "steered", "stopped"]);
 
@@ -238,7 +241,10 @@ export function describeActivity(activeTools: Map<string, string>, responseText?
         parts.push(action);
       }
     }
-    return parts.join(", ") + "…";
+    // Same form as THINKING_LABEL: capitalized, and no ellipsis — every surface
+    // that shows it already animates a spinner beside it.
+    const label = parts.join(", ");
+    return label.charAt(0).toUpperCase() + label.slice(1);
   }
 
   // No tools active — show truncated response text if available
@@ -246,7 +252,7 @@ export function describeActivity(activeTools: Map<string, string>, responseText?
     return truncateLine(responseText);
   }
 
-  return "thinking…";
+  return THINKING_LABEL;
 }
 
 // ---- Widget manager ----
@@ -477,7 +483,7 @@ export class AgentWidget {
       parts.push(elapsed);
       const statsText = parts.join(" · ");
 
-      const activity = bg ? describeActivity(bg.activeTools, bg.responseText) : "thinking…";
+      const activity = bg ? describeActivity(bg.activeTools, bg.responseText) : THINKING_LABEL;
 
       runningLines.push([
         truncate(theme.fg("dim", "├─") + ` ${theme.fg("accent", frame)} ${renderAgentName(a.type, theme, { bold: true })}${modeTag}  ${theme.fg("muted", a.description)} ${theme.fg("dim", "·")} ${fgPreservingNestedStyles(theme, "dim", statsText)}`),

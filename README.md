@@ -19,6 +19,7 @@ https://github.com/user-attachments/assets/8685261b-9338-4fea-8dfe-1c590d5df543
 - **Fullscreen conversation observer** — in Pi's fullscreen TUI mode, the conversation viewer fills the terminal with mouse wheel scrolling, a draggable scrollbar, a jump-to-latest indicator, and clickable footer actions. See [Fullscreen conversation observer](#fullscreen-conversation-observer). ([tintinweb/pi-subagents#357](https://github.com/tintinweb/pi-subagents/pull/357) — thanks [@sadiksaifi](https://github.com/sadiksaifi))
 - **Live tool output** — each tool call shows its runtime, timeout and arguments. Tool output is truncated to 3 lines but can be expanded.
 - **Optimised conversation viewer** — improved conversation viewer rendering when using styled themes.
+- **Thinking and assistant streaming** - added streaming of thinking and assistant messages in the subagent convesation viewer 
 
 ## Original Features
 
@@ -123,11 +124,11 @@ The extension renders a persistent widget above the editor showing active agents
 ```
 ● Agents
 ├─ ⠹ Agent  Refactor auth module · ↻5≤30 · 5 tool uses · 33.8k token (62%) · 12.3s
-│    ⎿  editing 2 files…
+│    ⎿  Editing 2 files
 ├─ ⠹ Explore  Find auth files · ↻3 · 3 tool uses · 12.4k token (8%) · 4.1s
-│    ⎿  searching…
+│    ⎿  Searching
 ├─ ⠹ Agent  Long-running task · ↻42 · 38 tool uses · 91.0k token (84% · ⇊2) · 2m17s
-│    ⎿  reading…
+│    ⎿  Reading
 └─ 2 queued
 ```
 
@@ -244,7 +245,7 @@ Individual agent results render Claude Code-style in the conversation:
 
 | State | Example |
 |-------|---------|
-| **Running** | `⠹ ↻3≤30 · 3 tool uses · 12.4k token (8%)` / `⎿ searching, reading 3 files…` |
+| **Running** | `⠹ ↻3≤30 · 3 tool uses · 12.4k token (8%)` / `⎿ Searching, reading 3 files` |
 | **Completed** | `✓ ↻8 · 5 tool uses · 33.8k token (62%) · 12.3s` / `⎿ Done` |
 | **Wrapped up** | `✓ ↻50≤50 · 50 tool uses · 89.1k token (84% · ⇊2) · 45.2s` / `⎿ Wrapped up (turn limit)` |
 | **Stopped** | `■ ↻3 · 3 tool uses · 12.4k token (8%)` / `⎿ Stopped` |

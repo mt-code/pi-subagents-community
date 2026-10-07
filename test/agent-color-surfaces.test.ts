@@ -59,6 +59,7 @@ function makeRecord(): AgentRecord {
     session: {
       messages: [],
       subscribe: vi.fn(() => vi.fn()),
+      state: {},
     } as unknown as AgentRecord["session"],
     lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 },
     compactionCount: 0,

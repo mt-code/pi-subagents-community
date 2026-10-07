@@ -53,6 +53,7 @@ import {
   getDisplayName,
   getPromptModeLabel,
   SPINNER,
+  THINKING_LABEL,
   type Theme,
   type UICtx,
 } from "./ui/agent-widget.js";
@@ -677,7 +678,7 @@ export default function (pi: ExtensionAPI) {
     // mention paths, and the `Symbol.for("pi-subagents:manager")` registry — and
     // none came through the Agent tool, which is where the UI activity tracker is
     // otherwise created. Without one the widget and FleetView have no tool name
-    // and no turn count, so the row reads `thinking…` for the agent's whole life
+    // and no turn count, so the row reads `Thinking` for the agent's whole life
     // while the header's tool-use count climbs beside it (#181). Double-tracking
     // is not possible: the Agent tool calls `manager.spawn` directly. The tracker
     // callbacks are the funnel's own — a caller's are not honoured, since a
@@ -1135,13 +1136,14 @@ export default function (pi: ExtensionAPI) {
 
   // Pi's `/settings → Fullscreen scrollbar`
   function getFullscreenScrollbarMode(): ScrollViewScrollbar { return pi.getSettings().fullscreenScrollbar ?? "auto"; }
+  function isThinkingHidden(): boolean { return pi.getSettings().hideThinkingBlock ?? false; }
 
   // Claude Code-style FleetView: navigable list of main + subagents below the editor.
   // The markdown arguments keep a conversation overlay opened here identical to
   // one opened from `/agents`: same setting on the way in, same persist out.
   const fleet = new FleetList(manager, agentActivity, isShowCostEnabled, getViewerMarkdown,
     (mode) => chooseViewerMarkdown(mode, currentCtx as unknown as ExtensionCommandContext | undefined),
-    getFullscreenScrollbarMode);
+    getFullscreenScrollbarMode, isThinkingHidden);
   let fleetViewEnabled = true;
   function isFleetViewEnabled(): boolean { return fleetViewEnabled; }
   function setFleetViewEnabled(b: boolean): void { fleetViewEnabled = b; fleet.setEnabled(b); }
@@ -1705,7 +1707,7 @@ Terse command-style prompts produce shallow, generic work.
       if (isPartial || details.status === "running") {
         const frame = SPINNER[details.spinnerFrame ?? 0];
         const s = stats(details);
-        return renderRunningAgentStatus(frame, s, details.activity ?? "thinking…", theme);
+        return renderRunningAgentStatus(frame, s, details.activity ?? THINKING_LABEL, theme);
       }
 
       // ---- Background agent launched ----
@@ -2153,7 +2155,7 @@ Terse command-style prompts produce shallow, generic work.
           // Deliberately still "running" while queued: the renderer routes any
           // status it doesn't know to raw text (see the catch-all below), which
           // would drop the spinner and read as hung. Only the activity line
-          // changes — "thinking…" would be a lie for an agent that has not
+          // changes — "Thinking" would be a lie for an agent that has not
           // started and may not for minutes.
           status: "running",
           activity: queuedAhead === undefined
@@ -3078,7 +3080,7 @@ Terse command-style prompts produce shallow, generic work.
           if (manager.abort(record.id)) {
             ctx.ui.notify(`Stopped "${record.description}".`, "info");
           }
-        }, keybindings, (message: string) => manager.steer(record.id, message), showCost, getViewerMarkdown, (mode) => chooseViewerMarkdown(mode, ctx), getFullscreenScrollbarMode(), ctx.ui.getToolsExpanded());
+        }, keybindings, (message: string) => manager.steer(record.id, message), showCost, getViewerMarkdown, (mode) => chooseViewerMarkdown(mode, ctx), getFullscreenScrollbarMode(), ctx.ui.getToolsExpanded(), isThinkingHidden());
       },
       {
         overlay: true,

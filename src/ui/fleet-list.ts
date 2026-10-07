@@ -146,6 +146,8 @@ export class FleetList {
      */
     private onViewerMarkdown?: (mode: ViewerMarkdownMode) => void,
     private scrollbarMode: () => ScrollViewScrollbar = () => "auto",
+    /** Pi's `hideThinkingBlock` setting, read when a conversation overlay opens. */
+    private hideThinking: () => boolean = () => false,
   ) {}
 
   // ---- Lifecycle ----
@@ -431,6 +433,7 @@ export class FleetList {
           this.onViewerMarkdown,
           this.scrollbarMode(),
           this.ui?.getToolsExpanded?.() ?? false,
+          this.hideThinking(),
         );
       },
       {

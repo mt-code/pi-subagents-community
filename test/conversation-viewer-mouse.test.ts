@@ -10,7 +10,7 @@ function setup(rows = 20, columns = 100, host?: TUI, scrollbar: ScrollViewScroll
   const messages = [{ role: "user", content: Array.from({ length: 100 }, (_, i) => `row-${i.toString().padStart(3, "0")}`).join("\n") }];
   const unsubscribe = vi.fn();
   let listener: AgentSessionEventListener = () => {};
-  const session = { messages, subscribe: (onEvent: AgentSessionEventListener) => { listener = onEvent; return unsubscribe; } } as unknown as AgentSession;
+  const session = { messages, state: {}, subscribe: (onEvent: AgentSessionEventListener) => { listener = onEvent; return unsubscribe; } } as unknown as AgentSession;
   const record = { type: "Explore", description: "Observe only", status: "running", toolUses: 0, startedAt: Date.now() } as AgentRecord;
   const done = vi.fn();
   const stop = vi.fn();
@@ -107,16 +107,18 @@ describe("fullscreen conversation observer", () => {
   });
 
   it("wheel scrolling pauses follow until the observer reaches the bottom again", () => {
-    const { render, mouse, messages } = setup();
+    const { render, mouse, messages, emit } = setup();
     const bottom = firstRow(render());
     expect(mouse({ wheelDelta: -5 })).toMatchObject({ handled: true });
     const paused = firstRow(render());
     expect(paused).not.toBe(bottom);
     messages[0].content += "\nrow-100";
+    emit({ type: "message_update" } as any);
     expect(firstRow(render())).toBe(paused);
     mouse({ wheelDelta: 1000 });
     expect(render().join("\n")).toContain("row-100");
     messages[0].content += "\nrow-101";
+    emit({ type: "message_update" } as any);
     expect(render().join("\n")).toContain("row-101");
     mouse({ wheelDelta: -1000 });
     expect(render().join("\n")).toContain("row-000");
@@ -234,6 +236,7 @@ describe("fullscreen conversation observer", () => {
     expect(render().join("\n")).toContain("new message 5");
     expect(render().join("\n")).not.toContain("Ctrl+End");
     messages.push({ role: "user", content: "following again" });
+    emit({ type: "message_update" } as any);
     expect(render().join("\n")).toContain("following again");
     mouse({ wheelDelta: -10 });
     expect(render().join("\n")).toContain("[ ↓ Jump to latest message · Ctrl+End ]");

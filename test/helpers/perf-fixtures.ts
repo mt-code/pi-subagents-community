@@ -65,6 +65,7 @@ export function perfSession(messages: unknown[] = []) {
   return {
     messages,
     subscribe: () => () => {},
+    state: {},
     dispose: () => {},
     getSessionStats: () => ({
       tokens: { input: 12_000, output: 3_000, cacheWrite: 500 },
@@ -191,12 +192,48 @@ export function makeSession(n: number) {
       });
     }
   }
+  let listener: (event: unknown) => void = () => {};
   return {
     messages,
-    subscribe: () => () => {},
+    subscribe: (fn: (event: unknown) => void) => {
+      listener = fn;
+      return () => {};
+    },
+    /**
+     * Fire a session event, as every streamed token does. The viewer caches its
+     * transcript between events, so a bench that wants the rebuild — the cost a
+     * live agent pays per token — emits before each render.
+     */
+    emit: () => listener({ type: "message_update" }),
+    state: {} as { streamingMessage?: unknown },
     dispose: () => {},
     getSessionStats: () => ({ tokens: { input: 0, output: 0, cacheWrite: 0 } }),
   } as any;
+}
+
+/**
+ * `makeSession(n)` with an assistant message still streaming: one thinking
+ * block of `thinkingChars` characters, and `textChars` of response text after it.
+ *
+ * `delta(i)` flips the last character of whichever block is growing — the text
+ * if there is any, else the thinking — rather than appending. The length stays
+ * fixed, so the thousandth sample measures the same work as the first, and the
+ * viewer re-parses the block either way: a changed suffix and an append both
+ * reach `Markdown.setText` with the whole text.
+ */
+export function makeStreamingSession(n: number, { thinkingChars = 0, textChars = 0 }: { thinkingChars?: number; textChars?: number }) {
+  const session = makeSession(n);
+  const fill = (chars: number) => PARAGRAPH.repeat(Math.ceil(chars / PARAGRAPH.length)).slice(0, chars);
+  const content: any[] = [];
+  if (thinkingChars > 0) content.push({ type: "thinking", thinking: fill(thinkingChars) });
+  if (textChars > 0) content.push({ type: "text", text: fill(textChars) });
+  session.state.streamingMessage = { role: "assistant", content };
+  const block = content.at(-1);
+  const key = block?.type === "text" ? "text" : "thinking";
+  session.delta = (i: number) => {
+    if (block) block[key] = block[key].slice(0, -1) + (i % 2 ? "a" : "b");
+  };
+  return session;
 }
 
 // ---- Render harnesses ----
@@ -269,12 +306,13 @@ export function mountViewer(
   record: unknown = makeRecord(0),
   markdownMode?: () => string,
   theme: unknown = perfTheme,
+  extra: { activity?: unknown; hideThinking?: boolean } = {},
 ) {
   const viewer = new Viewer(
     perfTui(120, 40),
     session,
     record,
-    undefined,
+    extra.activity,
     theme,
     () => {},
     undefined,
@@ -282,6 +320,10 @@ export function mountViewer(
     undefined,
     false,
     markdownMode,
+    undefined,
+    undefined,
+    false,
+    extra.hideThinking ?? false,
   );
   return viewer;
 }

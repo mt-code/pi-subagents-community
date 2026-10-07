@@ -6,13 +6,13 @@
  */
 
 import { type AgentSession, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import { type Component, type Focusable, Input, Markdown, type MarkdownOptions, type MarkdownTheme, matchesKey, type OverlayOptions, ScrollView, type ScrollViewScrollbar, type TUI, type TuiMouseEvent, type TuiMouseEventResult, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { type Component, type DefaultTextStyle, type Focusable, Input, Markdown, type MarkdownOptions, type MarkdownTheme, matchesKey, type OverlayOptions, ScrollView, type ScrollViewScrollbar, type TUI, type TuiMouseEvent, type TuiMouseEventResult, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { renderAgentName } from "../agent-color.js";
 import { extractText } from "../context.js";
 import type { AgentRecord, ViewerMarkdownMode } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent } from "../usage.js";
 import type { Theme } from "./agent-widget.js";
-import { type AgentActivity, buildInvocationTags, describeActivity, fgPreservingNestedStyles, formatCost, formatDuration, formatSessionTokens, getPromptModeLabel } from "./agent-widget.js";
+import { type AgentActivity, buildInvocationTags, describeActivity, fgPreservingNestedStyles, formatCost, formatDuration, formatSessionTokens, getPromptModeLabel, SPINNER, THINKING_LABEL } from "./agent-widget.js";
 import { collapseOutput, previewsTail, renderToolCall, TOOL_INDENT } from "./tool-block.js";
 import { createViewerKeys, type ViewerKeybindings, type ViewerKeys } from "./viewer-keys.js";
 
@@ -22,6 +22,10 @@ const MIN_VIEWPORT = 3;
 /** Height ceiling shared by the overlay's `maxHeight` and the viewer's internal viewport cap. */
 export const VIEWPORT_HEIGHT_PCT = 70;
 const SCROLLBAR_WIDTH = 1;
+/** Spinner frame interval, matching pi's own "Working" loader. */
+const SPINNER_RENDER_MS = 80;
+/** How often a running tool's runtime in its header refreshes — each refresh rebuilds the transcript. */
+const TOOL_RENDER_MS = 1000;
 /** One column per character, no escapes: a line this matches is as wide as it is long. */
 const PRINTABLE_ASCII = /^[\x20-\x7e]*$/;
 
@@ -92,6 +96,9 @@ function resolveMarkdownTheme(th: Theme): MarkdownTheme {
   }
 }
 
+const sgr = (on: number, off: number) => (text: string) => `\x1b[${on}m${text}\x1b[${off}m`;
+const italic = sgr(3, 23);
+
 /**
  * `Theme` carries only `fg` and `bold`, so the three remaining styles are
  * written as raw SGR. Rendering them as plain text instead would silently drop
@@ -99,7 +106,6 @@ function resolveMarkdownTheme(th: Theme): MarkdownTheme {
  * change into a content change.
  */
 function fallbackMarkdownTheme(th: Theme): MarkdownTheme {
-  const sgr = (on: number, off: number) => (text: string) => `\x1b[${on}m${text}\x1b[${off}m`;
   return {
     heading: text => th.bold(th.fg("accent", text)),
     link: text => th.fg("accent", text),
@@ -112,7 +118,7 @@ function fallbackMarkdownTheme(th: Theme): MarkdownTheme {
     hr: text => th.fg("dim", text),
     listBullet: text => th.fg("accent", text),
     bold: text => th.bold(text),
-    italic: sgr(3, 23),
+    italic,
     underline: sgr(4, 24),
     strikethrough: sgr(9, 29),
   };
@@ -190,8 +196,21 @@ export class ConversationViewer implements Component, Focusable {
    * only fills from updates seen while open, which a streaming tool sends often.
    */
   private readonly partials = new Map<string, string>();
-  /** Re-renders once a second while a tool runs, so its runtime ticks without events. */
+  /**
+   * Re-renders without events: every `SPINNER_RENDER_MS` while the indicator spinner
+   * shows, else once a second while a tool runs. Either way the transcript is
+   * dropped at most once a second, and only while a tool's runtime is ticking.
+   */
   private ticker: ReturnType<typeof setInterval> | undefined;
+  private tickerMs = 0;
+  /**
+   * The transcript as last built, reused until something it was built from
+   * changes. Width, mode and expansion are compared on every call; everything
+   * else arrives as a session event, a theme change or a tool-runtime tick, and
+   * each of those drops it. Without this, every spinner frame would rebuild the
+   * whole transcript — 12.5 times a second, ~100 ms each at 5000 messages.
+   */
+  private transcript: { width: number; mode: ViewerMarkdownMode; expanded: boolean; lines: string[]; builtAt: number } | undefined;
 
   constructor(
     private tui: TUI,
@@ -230,6 +249,11 @@ export class ConversationViewer implements Component, Focusable {
      * pi's expand key afterwards, without touching the main transcript.
      */
     private toolsExpanded = false,
+    /**
+     * Pi's `hideThinkingBlock` setting, captured at open like `showCost`: pi's
+     * toggle key cannot reach pi while the overlay holds focus.
+     */
+    private hideThinking = false,
   ) {
     this.fullscreen = tui.mode === "fullscreen";
     this.markdownTheme = resolveMarkdownTheme(theme);
@@ -249,6 +273,7 @@ export class ConversationViewer implements Component, Focusable {
       if (this.fullscreen && !this.scrollView.isFollowingEnd && event.type === "message_start" && ["user", "assistant", "toolResult", "bashExecution"].includes(event.message.role)) {
         this.newMessages++;
       }
+      this.transcript = undefined;
       this.tui.requestRender();
     });
   }
@@ -489,7 +514,7 @@ export class ConversationViewer implements Component, Focusable {
     if (invocationLine) lines.push(row(invocationLine));
     lines.push(hrMid);
 
-    // Content area — rebuild every render (live data, no cache needed)
+    // Content area — the transcript is cached; only the indicator is rebuilt every frame.
     const contentLines = this.fullscreen ? this.scrollView.render(width - 1) : this.buildContentLines(innerW);
     const viewportHeight = this.viewportHeight();
     const maxScroll = Math.max(0, contentLines.length - viewportHeight);
@@ -616,14 +641,22 @@ export class ConversationViewer implements Component, Focusable {
   }
 
   /** Wrap `text` literally — the pre-Markdown path, and the fallback from it. */
-  private rawLines(text: string, width: number, dim: boolean): string[] {
+  private rawLines(text: string, width: number, style?: DefaultTextStyle): string[] {
     const lines = wrapTextWithAnsi(text, width);
-    return dim ? lines.map(l => this.theme.fg("dim", l)) : lines;
+    if (!style) return lines;
+    return lines.map(l => {
+      const colored = style.color ? style.color(l) : l;
+      return style.italic ? italic(colored) : colored;
+    });
   }
 
-  /** Render `text` as Markdown, reusing this message's component instance. */
-  private markdownLines(msg: AgentSession["messages"][number], text: string, width: number, dim: boolean): string[] {
-    let entry = this.markdownCache.get(msg);
+  /**
+   * Render `text` as Markdown, reusing the component cached under `key` — a
+   * message, or a thinking block, so a message's thinking and text never share
+   * an entry.
+   */
+  private markdownLines(key: object, text: string, width: number, style?: DefaultTextStyle): string[] {
+    let entry = this.markdownCache.get(key);
     if (!entry) {
       entry = {
         md: new Markdown(
@@ -631,16 +664,14 @@ export class ConversationViewer implements Component, Focusable {
           0,
           0,
           this.markdownTheme,
-          // Keeps result prose visually receded, the way the raw path's
-          // per-line `fg("dim", …)` did. Fenced code is the exception and is
-          // left alone deliberately: pi's theme highlights it with its own
-          // colors, which this would otherwise flatten.
-          dim ? { color: (t: string) => this.theme.fg("dim", t) } : undefined,
+          // Fenced code is left alone by `style` deliberately: pi's theme
+          // highlights it with its own colors, which this would flatten.
+          style,
           MARKDOWN_OPTIONS,
         ),
         text,
       };
-      this.markdownCache.set(msg, entry);
+      this.markdownCache.set(key, entry);
     } else if (entry.text !== text) {
       // Streaming: the message object is stable, its text grows. A failed
       // prefix remains unsafe after append-only deltas, so retry only when the
@@ -650,7 +681,7 @@ export class ConversationViewer implements Component, Focusable {
       entry.text = text;
       if (shouldRetry) entry.failed = false;
     }
-    if (entry.failed) return this.rawLines(text, width, dim);
+    if (entry.failed) return this.rawLines(text, width, style);
 
     try {
       return entry.md.render(width);
@@ -662,7 +693,7 @@ export class ConversationViewer implements Component, Focusable {
       // fine — degrade to that instead, and remember, since the throw would
       // otherwise repeat on every render and every scroll key.
       entry.failed = true;
-      return this.rawLines(text, width, dim);
+      return this.rawLines(text, width, style);
     }
   }
 
@@ -689,20 +720,39 @@ export class ConversationViewer implements Component, Focusable {
     this.tui.requestRender();
   }
 
-  invalidate(): void { /* no cached state to clear */ }
+  invalidate(): void {
+    this.transcript = undefined;
+  }
 
-  /** Run the runtime ticker only while the agent has a tool in flight. */
+  /** Run the ticker at the rate the screen needs: spinner, tool runtime, or not at all. */
   private updateTicker(): void {
-    const running = this.record.status === "running"
+    const ms = this.closed ? 0 : this.indicatorLabel() ? SPINNER_RENDER_MS : this.toolRunning() ? TOOL_RENDER_MS : 0;
+    if (ms === this.tickerMs) return;
+    if (this.ticker) clearInterval(this.ticker);
+    this.ticker = ms ? setInterval(() => {
+      if (this.closed) return;
+      // A running tool's header shows its runtime, which lives in the cached
+      // transcript: refresh it once a second, not on every spinner frame.
+      if (this.transcript && this.toolRunning() && Date.now() - this.transcript.builtAt >= TOOL_RENDER_MS) this.transcript = undefined;
+      this.tui.requestRender();
+    }, ms) : undefined;
+    this.tickerMs = ms;
+  }
+
+  private toolRunning(): boolean {
+    return this.record.status === "running"
       && [...(this.record.toolTimings?.values() ?? [])].some(t => t.endedAt === undefined);
-    if (running && !this.ticker && !this.closed) {
-      this.ticker = setInterval(() => {
-        if (!this.closed) this.tui.requestRender();
-      }, 1000);
-    } else if (!running && this.ticker) {
-      clearInterval(this.ticker);
-      this.ticker = undefined;
-    }
+  }
+
+  /**
+   * The agent is waiting on the model: running, no tool in flight, and no
+   * response text streaming yet. Thinking content may be arriving — that is
+   * rendered in the transcript, or hidden, but the spinner shows either way.
+   */
+  private isThinking(): boolean {
+    if (this.record.status !== "running" || !this.activity || this.activity.activeTools.size > 0) return false;
+    const streaming = this.session.state.streamingMessage;
+    return !(streaming?.role === "assistant" && streaming.content.some(c => c.type === "text" && c.text.trim()));
   }
 
   dispose(): void {
@@ -710,6 +760,7 @@ export class ConversationViewer implements Component, Focusable {
     if (this.ticker) {
       clearInterval(this.ticker);
       this.ticker = undefined;
+      this.tickerMs = 0;
     }
     this.scrollView.setScrollbar("hidden"); // clears Pi's auto-hide timer
     if (this.unsubscribe) {
@@ -746,9 +797,39 @@ export class ConversationViewer implements Component, Focusable {
 
   private buildContentLines(width: number): string[] {
     if (width <= 0) return [];
+    const mode = this.markdownMode();
+    let t = this.transcript;
+    if (!t || t.width !== width || t.mode !== mode || t.expanded !== this.toolsExpanded) {
+      t = this.transcript = { width, mode, expanded: this.toolsExpanded, lines: this.transcriptLines(width, mode), builtAt: Date.now() };
+    }
+    const indicator = this.indicatorLines(width);
+    return indicator.length > 0 ? [...t.lines, ...indicator] : t.lines;
+  }
 
+  /**
+   * What the agent is doing now, shown beside the spinner: its tool activity,
+   * or Thinking. Streamed text needs none — it is on screen above.
+   */
+  private indicatorLabel(): string | undefined {
+    if (this.record.status === "running" && this.activity && this.activity.activeTools.size > 0) {
+      return describeActivity(this.activity.activeTools);
+    }
+    return this.isThinking() ? THINKING_LABEL : undefined;
+  }
+
+  private indicatorLines(width: number): string[] {
+    const label = this.indicatorLabel();
+    if (!label) return [];
+    const frame = SPINNER[Math.floor(Date.now() / SPINNER_RENDER_MS) % SPINNER.length];
+    return ["", truncateToWidth(this.theme.fg("accent", frame) + " " + this.theme.fg("muted", label), width)];
+  }
+
+  private transcriptLines(width: number, mode: ViewerMarkdownMode): string[] {
     const th = this.theme;
-    const messages = this.session.messages;
+    // The in-flight message joins `messages` only on `message_end`, in the same
+    // step that clears `streamingMessage`, so it is never listed twice.
+    const streaming = this.session.state.streamingMessage;
+    const messages = streaming?.role === "assistant" ? [...this.session.messages, streaming] : this.session.messages;
     const lines: string[] = [];
 
     if (messages.length === 0) {
@@ -756,7 +837,6 @@ export class ConversationViewer implements Component, Focusable {
       return lines;
     }
 
-    const mode = this.markdownMode();
     // Results rendered inside their call's block, so the loop below skips them.
     const results = new Map<string, Extract<AgentSession["messages"][number], { role: "toolResult" }>>();
     for (const msg of messages) {
@@ -777,18 +857,29 @@ export class ConversationViewer implements Component, Focusable {
         }
       } else if (msg.role === "assistant") {
         const textParts: string[] = [];
+        const thinking: Extract<(typeof msg.content)[number], { type: "thinking" }>[] = [];
         const toolCalls: Extract<(typeof msg.content)[number], { type: "toolCall" }>[] = [];
         for (const c of msg.content) {
           if (c.type === "text" && c.text) textParts.push(c.text);
+          else if (c.type === "thinking" && !this.hideThinking && !c.redacted && c.thinking.trim()) thinking.push(c);
           else if (c.type === "toolCall") toolCalls.push(c);
         }
         if (needsSeparator) lines.push(th.fg("dim", "───"));
         lines.push(th.bold("[Assistant]"));
+        // Styled as pi's own transcript styles it: italic, in `thinkingText`.
+        const thinkingStyle: DefaultTextStyle = { color: t => th.fg("thinkingText", t), italic: true };
+        for (const block of thinking) {
+          const text = block.thinking.trim();
+          lines.push(...(mode === "off"
+            ? this.rawLines(text, width, thinkingStyle)
+            : this.markdownLines(block, text, width, thinkingStyle)));
+        }
+        if (thinking.length > 0 && textParts.length > 0) lines.push("");
         if (textParts.length > 0) {
           const text = textParts.join("\n").trim();
           lines.push(...(mode === "off"
-            ? this.rawLines(text, width, false)
-            : this.markdownLines(msg, text, width, false)));
+            ? this.rawLines(text, width)
+            : this.markdownLines(msg, text, width)));
         }
         for (const call of toolCalls) {
           calledIds.add(call.id);
@@ -813,13 +904,6 @@ export class ConversationViewer implements Component, Focusable {
         continue;
       }
       needsSeparator = true;
-    }
-
-    // Streaming indicator for running agents
-    if (this.record.status === "running" && this.activity) {
-      const act = describeActivity(this.activity.activeTools, this.activity.responseText);
-      lines.push("");
-      lines.push(truncateToWidth(th.fg("accent", "▍ ") + th.fg("dim", act), width));
     }
 
     // Clamp only what overflows. `truncateToWidth` returns a fitting line
@@ -856,8 +940,10 @@ export class ConversationViewer implements Component, Focusable {
     if (!raw) return [];
     const innerW = Math.max(1, width - indent.length);
     const { text, elided } = capResult(raw, fromEnd);
+    // Keeps result prose visually receded.
+    const dim: DefaultTextStyle = { color: t => this.theme.fg("dim", t) };
     const out = collapseOutput(
-      msg && this.markdownMode() === "all" ? this.markdownLines(msg, text, innerW, true) : this.rawLines(text, innerW, true),
+      msg && this.markdownMode() === "all" ? this.markdownLines(msg, text, innerW, dim) : this.rawLines(text, innerW, dim),
       { expanded: this.toolsExpanded, fromEnd, expandKeyLabel: this.keys.expandKeyLabel, indent, theme: this.theme },
     );
     // Only meaningful when expanded: collapsed, the hidden-lines prompt already covers it.

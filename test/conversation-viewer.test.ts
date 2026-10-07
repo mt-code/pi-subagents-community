@@ -48,6 +48,9 @@ const { ConversationViewer, RESULT_MAX_CHARS } = await import("../src/ui/convers
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
+/** Tell `viewer` its session changed, as the event for an in-place mutation would. */
+const emit = (viewer: any) => viewer.session.emit();
+
 function mockTui(rows = 40, columns = 80) {
   return {
     terminal: { rows, columns },
@@ -56,9 +59,13 @@ function mockTui(rows = 40, columns = 80) {
 }
 
 function mockSession(messages: any[] = []) {
+  let listener: (event: any) => void = () => {};
   return {
     messages,
-    subscribe: vi.fn(() => vi.fn()),
+    subscribe: vi.fn((fn: (event: any) => void) => { listener = fn; return vi.fn(); }),
+    /** Fire a session event, as a streamed delta would, so the viewer drops its cached transcript. */
+    emit: (event: any = { type: "message_update" }) => listener(event),
+    state: {},
     dispose: vi.fn(),
     getSessionStats: () => ({ tokens: { input: 0, output: 0, cacheWrite: 0 } }),
   } as any;
@@ -560,6 +567,7 @@ describe("ConversationViewer", () => {
       // An append-only delta keeps the unsafe prefix, so it must stay literal
       // without retrying the recursive parser on every streamed update.
       messages[0].content[0].text += "\nmore";
+      emit(viewer);
       expect(strip(viewer.render(80).join("\n"))).toContain("more");
       expect(markdownRenderCalls).toBe(1);
 
@@ -570,6 +578,7 @@ describe("ConversationViewer", () => {
       // Replacing the failed content can remove the unsafe prefix, so it gets
       // one fresh Markdown attempt instead of staying literal forever.
       messages[0].content[0].text = "## safe";
+      emit(viewer);
       const replaced = strip(viewer.render(80).join("\n"));
       expect(markdownRenderCalls).toBe(2);
       expect(replaced).toContain("safe");
@@ -589,6 +598,7 @@ describe("ConversationViewer", () => {
 
       const before = elided();
       msg.content[0].text += "row\n".repeat(1000);
+      emit(viewer);
       const after = elided();
 
       expect(before).toBeGreaterThan(0);
@@ -651,6 +661,7 @@ describe("ConversationViewer", () => {
       expect(strip(viewer.render(80).join("\n"))).toContain("One");
 
       messages[0].content[0].text = "# Two";
+      emit(viewer);
       const out = strip(viewer.render(80).join("\n"));
 
       expect(out).toContain("Two");
@@ -858,6 +869,55 @@ describe("ConversationViewer", () => {
 
         vi.advanceTimersByTime(3_000);
         expect(tui.requestRender).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("rebuilds the transcript on each runtime tick, with no session event", () => {
+      vi.useFakeTimers();
+      try {
+        const viewer = viewerFor([call("c1", "bash", { command: "sleep 9" })], {
+          record: { status: "running", toolTimings: new Map([["c1", { startedAt: Date.now() }]]) },
+        });
+        viewer.render(80);
+        expect(content(viewer).join("\n")).toContain("[Tool Bash · 0.0s");
+
+        vi.advanceTimersByTime(1_000);
+        expect(content(viewer).join("\n")).toContain("[Tool Bash · 1.0s");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("animates the tool activity line, rebuilding the transcript only once a second", () => {
+      vi.useFakeTimers();
+      try {
+        const tui = mockTui(200, 80);
+        const activity = { activeTools: new Map([["k", "bash"]]), toolUses: 0, turnCount: 1, responseText: "" };
+        const viewer = new ConversationViewer(
+          tui, mockSession([call("c1", "bash", { command: "sleep 9" })]),
+          mockRecord({ status: "running", toolTimings: new Map([["c1", { startedAt: Date.now() }]]) }) as any,
+          activity as any, tagTheme, vi.fn(),
+        );
+        viewer.render(80);
+        const first = content(viewer).at(-1);
+        expect(first).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Running command$/);
+        const rebuilds = vi.spyOn(viewer as any, "transcriptLines");
+        tui.requestRender.mockClear();
+
+        for (let i = 0; i < 12; i++) {
+          vi.advanceTimersByTime(80);
+          viewer.render(80);
+        }
+        expect(tui.requestRender).toHaveBeenCalledTimes(12);
+        expect(rebuilds).not.toHaveBeenCalled();
+        expect(content(viewer).at(-1)).not.toBe(first);
+
+        vi.advanceTimersByTime(80);
+        viewer.render(80);
+        expect(rebuilds).toHaveBeenCalledTimes(1);
+        expect(content(viewer).join("\n")).toContain("[Tool Bash · 1.0s");
       } finally {
         vi.useRealTimers();
       }
@@ -1097,5 +1157,133 @@ describe("ConversationViewer", () => {
         assertAllLinesFit(viewer.render(w), w);
       }
     });
+  });
+});
+
+describe("ConversationViewer thinking", () => {
+  const tagTheme = { fg: (c: string, t: string) => `<${c}>${t}`, bold: (t: string) => t } as any;
+  const idle = () => ({ activeTools: new Map(), toolUses: 0, turnCount: 1, responseText: "" }) as any;
+  const thinkingMsg = (thinking: string, text = "") => ({
+    role: "assistant",
+    content: [{ type: "thinking", thinking }, ...(text ? [{ type: "text", text }] : [])],
+  });
+
+  function viewerFor(opts: {
+    messages?: any[]; streaming?: any; hideThinking?: boolean; activity?: any; tui?: any; mode?: "off" | "assistant";
+  } = {}) {
+    const session = { ...mockSession(opts.messages ?? [{ role: "user", content: "go" }]), state: { streamingMessage: opts.streaming } };
+    return new ConversationViewer(
+      opts.tui ?? mockTui(200, 80), session, mockRecord({ status: "running" }), opts.activity ?? idle(),
+      tagTheme, vi.fn(), undefined, undefined, undefined, false, opts.mode ? () => opts.mode! : undefined,
+      undefined, undefined, false, opts.hideThinking ?? false,
+    );
+  }
+  const content = (viewer: any): string => (viewer.buildContentLines(76) as string[]).join("\n");
+
+  it("streams the in-flight message's thinking, styled as thinking", () => {
+    const out = content(viewerFor({ streaming: thinkingMsg("weighing the options") }));
+    expect(out).toContain("[Assistant]");
+    expect(out).toMatch(/<thinkingText>.*weighing the options/);
+  });
+
+  it("styles thinking the same on the literal path", () => {
+    const out = content(viewerFor({ streaming: thinkingMsg("weighing the options"), mode: "off" }));
+    expect(out).toContain("\x1b[3m<thinkingText>weighing the options\x1b[23m");
+  });
+
+  it("keeps a finished message's thinking ahead of its text", () => {
+    const out = content(viewerFor({ messages: [thinkingMsg("plan first", "the answer")] }));
+    expect(out.indexOf("plan first")).toBeGreaterThan(-1);
+    expect(out.indexOf("plan first")).toBeLessThan(out.indexOf("the answer"));
+  });
+
+  it("shows no thinking text when pi hides thinking blocks", () => {
+    const out = content(viewerFor({
+      messages: [thinkingMsg("finished secret", "the answer")], streaming: thinkingMsg("live secret"), hideThinking: true,
+    }));
+    expect(out).not.toContain("secret");
+    expect(out).toContain("the answer");
+    expect(out).toContain("<muted>Thinking");
+  });
+
+  it("shows the spinner and Thinking while no text has streamed yet", () => {
+    const lines = (viewerFor({ streaming: thinkingMsg("hmm") }) as any).buildContentLines(76) as string[];
+    expect(lines.at(-1)).toMatch(/^<accent>[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] <muted>Thinking$/);
+  });
+
+  it("drops the indicator once response text streams, and renders that text", () => {
+    const out = content(viewerFor({ streaming: thinkingMsg("hmm", "partial answer") }));
+    expect(out).toContain("partial answer");
+    expect(out).not.toContain("Thinking");
+  });
+
+  it("shows the tool activity line rather than Thinking while a tool runs", () => {
+    const activity = { ...idle(), activeTools: new Map([["k", "read"]]) };
+    const out = content(viewerFor({ activity }));
+    expect(out).toMatch(/<accent>[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] <muted>Reading$/m);
+    expect(out).not.toContain("Thinking");
+  });
+
+  it("reuses the transcript on a spinner frame, redrawing only the indicator", () => {
+    vi.useFakeTimers();
+    try {
+      const viewer = viewerFor({ messages: [{ role: "assistant", content: [{ type: "text", text: "# Done" }] }], streaming: thinkingMsg("hmm") });
+      viewer.render(80); // starts the spinner ticker; inner width is 76
+      const first = (viewer as any).buildContentLines(76) as string[];
+      markdownRenderCalls = 0;
+
+      vi.advanceTimersByTime(80);
+      const next = (viewer as any).buildContentLines(76) as string[];
+
+      expect(markdownRenderCalls).toBe(0);
+      expect(next.at(-1)).not.toBe(first.at(-1));
+      expect(next.slice(0, -1)).toEqual(first.slice(0, -1));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the cached transcript until a session event says it changed", () => {
+    const streaming = thinkingMsg("first thought");
+    const viewer = viewerFor({ streaming });
+    expect(content(viewer)).toContain("first thought");
+
+    streaming.content[0].thinking = "second thought";
+    expect(content(viewer)).toContain("first thought");
+
+    (viewer as any).session.emit();
+    expect(content(viewer)).toContain("second thought");
+  });
+
+  it("rebuilds for a new width without a session event", () => {
+    const viewer = viewerFor({ messages: [{ role: "user", content: "word ".repeat(40) }] });
+    const wide = (viewer as any).buildContentLines(76) as string[];
+    const narrow = (viewer as any).buildContentLines(30) as string[];
+
+    expect(narrow.length).toBeGreaterThan(wide.length);
+    for (const line of narrow) expect(visibleWidth(line)).toBeLessThanOrEqual(30);
+  });
+
+  it("animates the spinner at 80ms while thinking, and stops once text streams", () => {
+    vi.useFakeTimers();
+    try {
+      const tui = mockTui(200, 80);
+      const streaming = thinkingMsg("hmm");
+      const viewer = viewerFor({ tui, streaming });
+      viewer.render(80);
+      tui.requestRender.mockClear();
+      vi.advanceTimersByTime(800);
+      expect(tui.requestRender).toHaveBeenCalledTimes(10);
+
+      streaming.content.push({ type: "text", text: "answer" } as any);
+      emit(viewer);
+      viewer.render(80);
+      tui.requestRender.mockClear();
+      vi.advanceTimersByTime(800);
+      expect(tui.requestRender).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
