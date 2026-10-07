@@ -889,6 +889,39 @@ describe("ConversationViewer", () => {
         vi.useRealTimers();
       }
     });
+
+    it("animates the tool activity line, rebuilding the transcript only once a second", () => {
+      vi.useFakeTimers();
+      try {
+        const tui = mockTui(200, 80);
+        const activity = { activeTools: new Map([["k", "bash"]]), toolUses: 0, turnCount: 1, responseText: "" };
+        const viewer = new ConversationViewer(
+          tui, mockSession([call("c1", "bash", { command: "sleep 9" })]),
+          mockRecord({ status: "running", toolTimings: new Map([["c1", { startedAt: Date.now() }]]) }) as any,
+          activity as any, tagTheme, vi.fn(),
+        );
+        viewer.render(80);
+        const first = content(viewer).at(-1);
+        expect(first).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Running command$/);
+        const rebuilds = vi.spyOn(viewer as any, "transcriptLines");
+        tui.requestRender.mockClear();
+
+        for (let i = 0; i < 12; i++) {
+          vi.advanceTimersByTime(80);
+          viewer.render(80);
+        }
+        expect(tui.requestRender).toHaveBeenCalledTimes(12);
+        expect(rebuilds).not.toHaveBeenCalled();
+        expect(content(viewer).at(-1)).not.toBe(first);
+
+        vi.advanceTimersByTime(80);
+        viewer.render(80);
+        expect(rebuilds).toHaveBeenCalledTimes(1);
+        expect(content(viewer).join("\n")).toContain("[Tool Bash · 1.0s");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe("safety net against upstream wrapTextWithAnsi bugs", () => {
@@ -1187,7 +1220,7 @@ describe("ConversationViewer thinking", () => {
   it("shows the tool activity line rather than Thinking while a tool runs", () => {
     const activity = { ...idle(), activeTools: new Map([["k", "read"]]) };
     const out = content(viewerFor({ activity }));
-    expect(out).toContain("reading…");
+    expect(out).toMatch(/<accent>[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] <muted>Reading$/m);
     expect(out).not.toContain("Thinking");
   });
 

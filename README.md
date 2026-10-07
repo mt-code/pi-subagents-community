@@ -124,11 +124,11 @@ The extension renders a persistent widget above the editor showing active agents
 ```
 ● Agents
 ├─ ⠹ Agent  Refactor auth module · ↻5≤30 · 5 tool uses · 33.8k token (62%) · 12.3s
-│    ⎿  editing 2 files…
+│    ⎿  Editing 2 files
 ├─ ⠹ Explore  Find auth files · ↻3 · 3 tool uses · 12.4k token (8%) · 4.1s
-│    ⎿  searching…
+│    ⎿  Searching
 ├─ ⠹ Agent  Long-running task · ↻42 · 38 tool uses · 91.0k token (84% · ⇊2) · 2m17s
-│    ⎿  reading…
+│    ⎿  Reading
 └─ 2 queued
 ```
 
@@ -245,7 +245,7 @@ Individual agent results render Claude Code-style in the conversation:
 
 | State | Example |
 |-------|---------|
-| **Running** | `⠹ ↻3≤30 · 3 tool uses · 12.4k token (8%)` / `⎿ searching, reading 3 files…` |
+| **Running** | `⠹ ↻3≤30 · 3 tool uses · 12.4k token (8%)` / `⎿ Searching, reading 3 files` |
 | **Completed** | `✓ ↻8 · 5 tool uses · 33.8k token (62%) · 12.3s` / `⎿ Done` |
 | **Wrapped up** | `✓ ↻50≤50 · 50 tool uses · 89.1k token (84% · ⇊2) · 45.2s` / `⎿ Wrapped up (turn limit)` |
 | **Stopped** | `■ ↻3 · 3 tool uses · 12.4k token (8%)` / `⎿ Stopped` |

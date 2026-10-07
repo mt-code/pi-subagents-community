@@ -241,7 +241,10 @@ export function describeActivity(activeTools: Map<string, string>, responseText?
         parts.push(action);
       }
     }
-    return parts.join(", ") + "…";
+    // Same form as THINKING_LABEL: capitalized, and no ellipsis — every surface
+    // that shows it already animates a spinner beside it.
+    const label = parts.join(", ");
+    return label.charAt(0).toUpperCase() + label.slice(1);
   }
 
   // No tools active — show truncated response text if available
