@@ -196,10 +196,19 @@ export class ConversationViewer implements Component, Focusable {
   private readonly partials = new Map<string, string>();
   /**
    * Re-renders without events: every `SPINNER_MS` while the Thinking spinner
-   * shows, once a second while a tool runs so its runtime ticks.
+   * shows — redrawing only the indicator — and once a second while a tool runs,
+   * dropping the transcript so its runtime ticks.
    */
   private ticker: ReturnType<typeof setInterval> | undefined;
   private tickerMs = 0;
+  /**
+   * The transcript as last built, reused until something it was built from
+   * changes. Width, mode and expansion are compared on every call; everything
+   * else arrives as a session event, a theme change or a tool-runtime tick, and
+   * each of those drops it. Without this, every spinner frame would rebuild the
+   * whole transcript — 12.5 times a second, ~100 ms each at 5000 messages.
+   */
+  private transcript: { width: number; mode: ViewerMarkdownMode; expanded: boolean; lines: string[] } | undefined;
 
   constructor(
     private tui: TUI,
@@ -262,6 +271,7 @@ export class ConversationViewer implements Component, Focusable {
       if (this.fullscreen && !this.scrollView.isFollowingEnd && event.type === "message_start" && ["user", "assistant", "toolResult", "bashExecution"].includes(event.message.role)) {
         this.newMessages++;
       }
+      this.transcript = undefined;
       this.tui.requestRender();
     });
   }
@@ -502,7 +512,7 @@ export class ConversationViewer implements Component, Focusable {
     if (invocationLine) lines.push(row(invocationLine));
     lines.push(hrMid);
 
-    // Content area — rebuild every render (live data, no cache needed)
+    // Content area — the transcript is cached; only the indicator is rebuilt every frame.
     const contentLines = this.fullscreen ? this.scrollView.render(width - 1) : this.buildContentLines(innerW);
     const viewportHeight = this.viewportHeight();
     const maxScroll = Math.max(0, contentLines.length - viewportHeight);
@@ -708,7 +718,9 @@ export class ConversationViewer implements Component, Focusable {
     this.tui.requestRender();
   }
 
-  invalidate(): void { /* no cached state to clear */ }
+  invalidate(): void {
+    this.transcript = undefined;
+  }
 
   /** Run the ticker at the rate the screen needs: spinner, tool runtime, or not at all. */
   private updateTicker(): void {
@@ -718,7 +730,9 @@ export class ConversationViewer implements Component, Focusable {
     if (ms === this.tickerMs) return;
     if (this.ticker) clearInterval(this.ticker);
     this.ticker = ms ? setInterval(() => {
-      if (!this.closed) this.tui.requestRender();
+      if (this.closed) return;
+      if (ms !== SPINNER_MS) this.transcript = undefined;
+      this.tui.requestRender();
     }, ms) : undefined;
     this.tickerMs = ms;
   }
@@ -776,7 +790,32 @@ export class ConversationViewer implements Component, Focusable {
 
   private buildContentLines(width: number): string[] {
     if (width <= 0) return [];
+    const mode = this.markdownMode();
+    let t = this.transcript;
+    if (!t || t.width !== width || t.mode !== mode || t.expanded !== this.toolsExpanded) {
+      t = this.transcript = { width, mode, expanded: this.toolsExpanded, lines: this.transcriptLines(width, mode) };
+    }
+    const indicator = this.indicatorLines(width);
+    return indicator.length > 0 ? [...t.lines, ...indicator] : t.lines;
+  }
 
+  /**
+   * What the agent is doing now: its tool activity, or the Thinking spinner.
+   * Streamed text needs none — it is on screen above.
+   */
+  private indicatorLines(width: number): string[] {
+    const th = this.theme;
+    if (this.record.status === "running" && this.activity && this.activity.activeTools.size > 0) {
+      return ["", truncateToWidth(th.fg("accent", "▍ ") + th.fg("dim", describeActivity(this.activity.activeTools)), width)];
+    }
+    if (this.isThinking()) {
+      const frame = SPINNER[Math.floor(Date.now() / SPINNER_MS) % SPINNER.length];
+      return ["", truncateToWidth(th.fg("accent", frame) + " " + th.fg("muted", THINKING_LABEL), width)];
+    }
+    return [];
+  }
+
+  private transcriptLines(width: number, mode: ViewerMarkdownMode): string[] {
     const th = this.theme;
     // The in-flight message joins `messages` only on `message_end`, in the same
     // step that clears `streamingMessage`, so it is never listed twice.
@@ -789,7 +828,6 @@ export class ConversationViewer implements Component, Focusable {
       return lines;
     }
 
-    const mode = this.markdownMode();
     // Results rendered inside their call's block, so the loop below skips them.
     const results = new Map<string, Extract<AgentSession["messages"][number], { role: "toolResult" }>>();
     for (const msg of messages) {
@@ -857,18 +895,6 @@ export class ConversationViewer implements Component, Focusable {
         continue;
       }
       needsSeparator = true;
-    }
-
-    // Streaming indicator for running agents. Streamed text needs none: it is
-    // on screen above.
-    if (this.record.status === "running" && this.activity && this.activity.activeTools.size > 0) {
-      const act = describeActivity(this.activity.activeTools);
-      lines.push("");
-      lines.push(truncateToWidth(th.fg("accent", "▍ ") + th.fg("dim", act), width));
-    } else if (this.isThinking()) {
-      const frame = SPINNER[Math.floor(Date.now() / SPINNER_MS) % SPINNER.length];
-      lines.push("");
-      lines.push(th.fg("accent", frame) + " " + th.fg("muted", THINKING_LABEL));
     }
 
     // Clamp only what overflows. `truncateToWidth` returns a fitting line
