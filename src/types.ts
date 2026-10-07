@@ -153,6 +153,12 @@ export type MentionResolution =
   | { kind: "live"; record: AgentRecord }
   | { kind: "tombstone"; entry: AgentTombstone };
 
+/** When one tool call started and, once it has, finished (epoch ms). */
+export interface ToolTiming {
+  startedAt: number;
+  endedAt?: number;
+}
+
 export interface AgentRecord {
   id: string;
   type: SubagentType;
@@ -175,6 +181,8 @@ export interface AgentRecord {
   result?: string;
   error?: string;
   toolUses: number;
+  /** Wall-clock start/end per tool call, keyed by `toolCallId`. Created on the first tool. */
+  toolTimings?: Map<string, ToolTiming>;
   startedAt: number;
   completedAt?: number;
   session?: AgentSession;

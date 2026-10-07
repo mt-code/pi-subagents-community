@@ -382,10 +382,11 @@ describe("ConversationViewer", () => {
       /** Tall enough that the assertion reads the whole transcript, not the scrolled window. */
       rows = 200,
     ) {
+      // Expanded: these tests are about the full result, not the collapsed preview.
       return new ConversationViewer(
         mockTui(rows, 80), mockSession(messages), mockRecord({ status: "completed" }), undefined,
         ansiTheme(), vi.fn(), undefined, undefined, undefined, false,
-        mode ? () => mode : undefined, onMode,
+        mode ? () => mode : undefined, onMode, undefined, true,
       );
     }
 
@@ -607,11 +608,12 @@ describe("ConversationViewer", () => {
       expect(out).not.toContain("truncated");
     });
 
-    it("caps bash output with the same rule as a tool result", () => {
+    it("caps bash output with the same rule as a tool result, keeping the tail", () => {
       const messages = [{ role: "bashExecution", command: "yes", output: "y\n".repeat(20000) }];
-      const out = strip(viewerFor(messages).render(80).join("\n"));
+      // The notice leads the tail it kept, above the auto-scrolled window.
+      const content = ((viewerFor(messages) as any).buildContentLines(76) as string[]).map(strip);
 
-      expect(out).toMatch(/\.\.\. \(truncated, [\d.]+[kM]? more characters\)/);
+      expect(content[1]).toMatch(/^\.\.\. \(truncated, [\d.]+[kM]? earlier characters\)$/);
     });
 
     it("keeps tool results dim even when rendering them as Markdown", () => {
@@ -671,6 +673,193 @@ describe("ConversationViewer", () => {
         // `truncateToWidth` is the #7 backstop, not what keeps these in bounds —
         // if it fires on Markdown output, content is being silently cut.
         expect(content.filter(l => strip(l).endsWith("..."))).toEqual([]);
+      }
+    });
+  });
+
+  describe("tool blocks", () => {
+    /** Color names inline, so a test can tell an error header from a muted one. */
+    const tagTheme = { fg: (c: string, t: string) => `<${c}>${t}`, bold: (t: string) => t } as any;
+    const untag = (l: string) => l.replace(/<[a-zA-Z]+>/g, "");
+    const lines = (n: number) => Array.from({ length: n }, (_, i) => `l${i + 1}`).join("\n");
+    const call = (id: string, name: string, args: Record<string, unknown>) =>
+      ({ role: "assistant", content: [{ type: "toolCall", id, name, arguments: args }] });
+    const res = (id: string, name: string, text: string, isError = false) =>
+      ({ role: "toolResult", toolCallId: id, toolName: name, isError, content: [{ type: "text", text }] });
+
+    function viewerFor(messages: any[], opts: { record?: Partial<AgentRecord>; expanded?: boolean; session?: any; tui?: any } = {}) {
+      return new ConversationViewer(
+        opts.tui ?? mockTui(200, 80), opts.session ?? mockSession(messages), mockRecord({ status: "completed", ...opts.record }), undefined,
+        tagTheme, vi.fn(), undefined, undefined, undefined, false, undefined, undefined, undefined, opts.expanded ?? false,
+      );
+    }
+    const content = (viewer: any): string[] => (viewer.buildContentLines(76) as string[]).map(untag);
+
+    it("heads the call with its runtime and bash timeout, then its command and output directly beneath", () => {
+      const viewer = viewerFor([call("c1", "bash", { command: "ls -la", timeout: 15 }), res("c1", "bash", "out")], {
+        record: { toolTimings: new Map([["c1", { startedAt: 1_000, endedAt: 2_000 }]]) },
+      });
+      const out = content(viewer);
+      const at = out.indexOf("  [Tool Bash · 1.0s · 15s timeout]");
+
+      expect(at).toBeGreaterThanOrEqual(0);
+      expect(out.slice(at + 1, at + 4)).toEqual(["    ls -la", "    out"]);
+    });
+
+    it("ends at the command while the call has no output yet", () => {
+      const out = content(viewerFor([call("c1", "bash", { command: "sleep 9" })]));
+
+      expect(out.slice(-2)).toEqual(["  [Tool Bash · no timeout]", "    sleep 9"]);
+    });
+
+    it("ticks the runtime of a tool still running", () => {
+      const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
+      try {
+        const viewer = viewerFor([call("c1", "bash", { command: "sleep 9" })], {
+          record: { status: "running", toolTimings: new Map([["c1", { startedAt: 7_500 }]]) },
+        });
+        expect(content(viewer)).toContain("  [Tool Bash · 2.5s · no timeout]");
+      } finally {
+        now.mockRestore();
+      }
+    });
+
+    it("omits the runtime when no timing was recorded, and the timeout for non-bash tools", () => {
+      const out = content(viewerFor([call("c1", "read", { path: "a.ts", timeout: 5 }), res("c1", "read", "x")]));
+
+      expect(out).toContain("  [Tool Read]");
+      expect(out).toContain("    a.ts");
+    });
+
+    it("colors the arguments like the header, apart from the output", () => {
+      const raw = (bash: any) => (viewerFor([call("c1", "bash", { command: "ls -la" }), bash]) as any).buildContentLines(76) as string[];
+      const ok = raw(res("c1", "bash", "file-listing"));
+      const failed = raw(res("c1", "bash", "file-listing", true));
+
+      expect(ok.find(l => l.includes("ls -la"))).toMatch(/^<muted>/);
+      expect(ok.find(l => l.includes("file-listing"))).toMatch(/^ *<dim>/);
+      expect(failed.find(l => l.includes("ls -la"))).toMatch(/^<error>/);
+    });
+
+    it("colors the header as an error when the result failed", () => {
+      const viewer = viewerFor([call("c1", "bash", { command: "false" }), res("c1", "bash", "boom", true)]);
+      const header = (viewer as any).buildContentLines(76).find((l: string) => l.includes("[Tool Bash"));
+
+      expect(header).toContain("<error>");
+    });
+
+    it("previews the last 3 lines of bash output, with a hidden-lines prompt above", () => {
+      const out = content(viewerFor([call("c1", "bash", { command: "seq 10" }), res("c1", "bash", lines(10))]));
+      const at = out.indexOf("    … 7 earlier lines hidden · ctrl+o to expand");
+
+      expect(at).toBeGreaterThan(0);
+      expect(out.slice(at + 1, at + 4)).toEqual(["    l8", "    l9", "    l10"]);
+      expect(out).not.toContain("    l7");
+    });
+
+    it("previews the first 3 lines of other tools, with a hidden-lines prompt below", () => {
+      const out = content(viewerFor([call("c1", "read", { path: "f" }), res("c1", "read", lines(10))]));
+      const at = out.indexOf("    l1");
+
+      expect(out.slice(at, at + 4)).toEqual(["    l1", "    l2", "    l3", "    … 7 more lines hidden · ctrl+o to expand"]);
+      expect(out).not.toContain("    l4");
+    });
+
+    it("says `line` for one hidden line, and shows no prompt when nothing is hidden", () => {
+      expect(content(viewerFor([call("c1", "read", { path: "f" }), res("c1", "read", lines(4))])))
+        .toContain("    … 1 more line hidden · ctrl+o to expand");
+      expect(content(viewerFor([call("c1", "read", { path: "f" }), res("c1", "read", lines(3))])).join("\n"))
+        .not.toContain("hidden");
+    });
+
+    it("expands and collapses with ctrl+o", () => {
+      const viewer = viewerFor([call("c1", "read", { path: "f" }), res("c1", "read", lines(10))]);
+      viewer.render(80);
+
+      viewer.handleInput("\x0f");
+      expect(content(viewer)).toContain("    l10");
+      expect(content(viewer).join("\n")).not.toContain("hidden");
+
+      viewer.handleInput("\x0f");
+      expect(content(viewer)).not.toContain("    l10");
+    });
+
+    it("opens expanded when pi's tool output is expanded", () => {
+      expect(content(viewerFor([call("c1", "read", { path: "f" }), res("c1", "read", lines(10))], { expanded: true })))
+        .toContain("    l10");
+    });
+
+    it("shows only the first line of multi-line arguments until expanded", () => {
+      const messages = [call("c1", "bash", { command: "echo a\necho b" })];
+
+      expect(content(viewerFor(messages))).toContain("    echo a …");
+      expect(content(viewerFor(messages))).toContain("  [Tool Bash · no timeout]");
+      const expanded = content(viewerFor(messages, { expanded: true }));
+      expect(expanded).toContain("    echo a");
+      expect(expanded).toContain("    echo b");
+    });
+
+    it("streams live output from tool_execution_update until the tool ends", () => {
+      const session = mockSession([call("c1", "bash", { command: "make" })]);
+      const tui = mockTui(200, 80);
+      const viewer = viewerFor([], { session, tui });
+      const emit = session.subscribe.mock.calls[0][0];
+
+      emit({ type: "tool_execution_update", toolCallId: "c1", toolName: "bash", args: {}, partialResult: { content: [{ type: "text", text: "building..." }] } });
+      expect(content(viewer)).toContain("    building...");
+      expect(tui.requestRender).toHaveBeenCalled();
+
+      emit({ type: "tool_execution_end", toolCallId: "c1", toolName: "bash", result: {}, isError: false });
+      expect(content(viewer).join("\n")).not.toContain("building...");
+    });
+
+    it("renders a result once, inside its call's block, but keeps an orphaned one", () => {
+      const out = content(viewerFor([
+        call("c1", "read", { path: "f" }), res("c1", "read", "matched output"),
+        res("gone", "read", "orphan output"),
+      ]));
+
+      expect(out.filter(l => l.includes("matched output"))).toHaveLength(1);
+      expect(out.filter(l => l === "[Result]")).toHaveLength(1);
+      expect(out).toContain("orphan output");
+    });
+
+    it("re-renders every second while a tool runs, and stops once disposed", () => {
+      vi.useFakeTimers();
+      try {
+        const tui = mockTui(200, 80);
+        const viewer = viewerFor([call("c1", "bash", { command: "sleep 9" })], {
+          tui, record: { status: "running", toolTimings: new Map([["c1", { startedAt: Date.now() }]]) },
+        });
+        viewer.render(80);
+        tui.requestRender.mockClear();
+
+        vi.advanceTimersByTime(2_000);
+        expect(tui.requestRender).toHaveBeenCalledTimes(2);
+
+        viewer.dispose();
+        vi.advanceTimersByTime(2_000);
+        expect(tui.requestRender).toHaveBeenCalledTimes(2);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("runs no ticker once every tool has finished", () => {
+      vi.useFakeTimers();
+      try {
+        const tui = mockTui(200, 80);
+        const viewer = viewerFor([call("c1", "bash", { command: "ls" })], {
+          tui, record: { status: "running", toolTimings: new Map([["c1", { startedAt: 0, endedAt: 1 }]]) },
+        });
+        viewer.render(80);
+        tui.requestRender.mockClear();
+
+        vi.advanceTimersByTime(3_000);
+        expect(tui.requestRender).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
       }
     });
   });

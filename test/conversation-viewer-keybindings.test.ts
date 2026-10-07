@@ -103,6 +103,28 @@ describe("viewer-keys", () => {
   });
 });
 
+describe("viewer-keys expand", () => {
+  const CTRL_O = "\x0f";
+  const CTRL_E = "\x05";
+  const withExpand = (user: Record<string, string> = {}) => new KeybindingsManager({
+    ...TUI_KEYBINDINGS,
+    "app.tools.expand": { defaultKeys: "ctrl+o", description: "Toggle tool output" },
+  }, user);
+
+  it("defaults to ctrl+o without a manager", () => {
+    const keys = createViewerKeys();
+    expect(keys.toggleExpand(CTRL_O)).toBe(true);
+    expect(keys.expandKeyLabel).toBe("ctrl+o");
+  });
+
+  it("follows a rebound app.tools.expand, in matching and in the hint label", () => {
+    const keys = createViewerKeys(withExpand({ "app.tools.expand": "ctrl+e" }));
+    expect(keys.toggleExpand(CTRL_E)).toBe(true);
+    expect(keys.toggleExpand(CTRL_O)).toBe(false);
+    expect(keys.expandKeyLabel).toBe("ctrl+e");
+  });
+});
+
 describe("ConversationViewer custom keybindings", () => {
   it("scrolls with ctrl+p/ctrl+n when bound to tui.select.up/down", () => {
     const viewer = createViewer(createEmacsKeybindings());

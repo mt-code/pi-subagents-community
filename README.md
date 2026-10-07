@@ -17,6 +17,7 @@ https://github.com/user-attachments/assets/8685261b-9338-4fea-8dfe-1c590d5df543
 
 - **Pi v1.0.0 Support** — added support for the official first version of Pi.
 - **Fullscreen conversation observer** — in Pi's fullscreen TUI mode, the conversation viewer fills the terminal with mouse wheel scrolling, a draggable scrollbar, a jump-to-latest indicator, and clickable footer actions. See [Fullscreen conversation observer](#fullscreen-conversation-observer). ([tintinweb/pi-subagents#357](https://github.com/tintinweb/pi-subagents/pull/357) — thanks [@sadiksaifi](https://github.com/sadiksaifi))
+- **Live tool output** — each tool call shows a header with its runtime, timeout and arguments.
 
 ## Original Features
 

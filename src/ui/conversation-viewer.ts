@@ -9,10 +9,10 @@ import { type AgentSession, getMarkdownTheme } from "@earendil-works/pi-coding-a
 import { type Component, type Focusable, Input, Markdown, type MarkdownOptions, type MarkdownTheme, matchesKey, type OverlayOptions, ScrollView, type ScrollViewScrollbar, type TUI, type TuiMouseEvent, type TuiMouseEventResult, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { renderAgentName } from "../agent-color.js";
 import { extractText } from "../context.js";
-import type { AgentRecord, ViewerMarkdownMode } from "../types.js";
+import type { AgentRecord, ToolTiming, ViewerMarkdownMode } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent } from "../usage.js";
 import type { Theme } from "./agent-widget.js";
-import { type AgentActivity, buildInvocationTags, describeActivity, fgPreservingNestedStyles, formatCost, formatDuration, formatSessionTokens, getPromptModeLabel } from "./agent-widget.js";
+import { type AgentActivity, buildInvocationTags, describeActivity, fgPreservingNestedStyles, formatCost, formatDuration, formatMs, formatSessionTokens, getPromptModeLabel } from "./agent-widget.js";
 import { createViewerKeys, type ViewerKeybindings, type ViewerKeys } from "./viewer-keys.js";
 
 /** Base lines consumed by chrome: top border + header + header sep + footer sep + footer + bottom border. */
@@ -45,6 +45,15 @@ export function getConversationOverlayOptions(tui: Pick<TUI, "mode">): OverlayOp
  * most real results mid-sentence.
  */
 export const RESULT_MAX_CHARS = 16_000;
+
+/** Lines of tool output shown while tool output is collapsed. */
+export const TOOL_PREVIEW_LINES = 3;
+
+/** Indent of a tool block's `[Tool …]` header. */
+const TOOL_HEADER_INDENT = "  ";
+
+/** Indent of a tool block's arguments and output under its header. */
+const TOOL_INDENT = "    ";
 
 /** Cycle order for the viewer's `m` key. */
 const MARKDOWN_MODES: readonly ViewerMarkdownMode[] = ["off", "assistant", "all"];
@@ -123,11 +132,14 @@ function fallbackMarkdownTheme(th: Theme): MarkdownTheme {
  * Appended into the string it becomes content: a cut landing inside a fenced
  * code block — likely, on exactly the large `ctx_execute` results this is for —
  * renders the notice as a line of source inside the fence.
+ *
+ * `fromEnd` keeps the tail instead — for shell output, where the newest lines
+ * are the ones that matter and the collapsed preview shows the end.
  */
-function capResult(text: string): { text: string; elided: number } {
+function capResult(text: string, fromEnd = false): { text: string; elided: number } {
   if (text.length <= RESULT_MAX_CHARS) return { text, elided: 0 };
   return {
-    text: text.slice(0, RESULT_MAX_CHARS),
+    text: fromEnd ? text.slice(-RESULT_MAX_CHARS) : text.slice(0, RESULT_MAX_CHARS),
     elided: text.length - RESULT_MAX_CHARS,
   };
 }
@@ -145,8 +157,48 @@ function humanCount(n: number): string {
   return `${value.toFixed(1).replace(/\.0$/, "")}${thousands ? "k" : "M"}`;
 }
 
-function truncationNote(elided: number): string {
-  return `... (truncated, ${humanCount(elided)} more character${elided === 1 ? "" : "s"})`;
+function truncationNote(elided: number, fromEnd = false): string {
+  return `... (truncated, ${humanCount(elided)} ${fromEnd ? "earlier" : "more"} character${elided === 1 ? "" : "s"})`;
+}
+
+/** Shell output previews its tail, like pi's own bash renderer; everything else its head. */
+function previewsTail(toolName: string): boolean {
+  return toolName === "bash";
+}
+
+/**
+ * The summary of a call's arguments shown under its header: the
+ * command for bash, the path or pattern for the file tools, compact JSON for
+ * anything else.
+ */
+function formatToolArgs(toolName: string, args: Record<string, unknown> | undefined): string {
+  if (!args) return "";
+  const str = (key: string) => typeof args[key] === "string" ? args[key] as string : undefined;
+  switch (toolName) {
+    case "bash": return str("command") ?? "";
+    case "read":
+    case "write":
+    case "edit": return str("path") ?? "";
+    case "grep":
+    case "find":
+    case "ls": return [str("pattern"), str("path")].filter(Boolean).join("  ");
+    default: {
+      const json = JSON.stringify(args);
+      return json === "{}" ? "" : json;
+    }
+  }
+}
+
+/**
+ * `[Tool Bash · 1.0s · 15s timeout]` — runtime only once timing is known. Bash
+ * always states its timeout, `no timeout` included: pi's bash has no default,
+ * so an absent value means the command can run forever.
+ */
+function toolHeader(toolName: string, args: Record<string, unknown> | undefined, timing: ToolTiming | undefined): string {
+  const parts = [`Tool ${toolName.charAt(0).toUpperCase()}${toolName.slice(1)}`];
+  if (timing) parts.push(formatMs((timing.endedAt ?? Date.now()) - timing.startedAt));
+  if (toolName === "bash") parts.push(typeof args?.timeout === "number" ? `${args.timeout}s timeout` : "no timeout");
+  return `[${parts.join(" · ")}]`;
 }
 
 export class ConversationViewer implements Component, Focusable {
@@ -179,6 +231,13 @@ export class ConversationViewer implements Component, Focusable {
    * Weak so a compacted-away message doesn't pin its render.
    */
   private readonly markdownCache = new WeakMap<object, { md: Markdown; text: string; failed?: boolean }>();
+  /**
+   * Streamed output of tools still running, by `toolCallId`. Viewer-local: it
+   * only fills from updates seen while open, which a streaming tool sends often.
+   */
+  private readonly partials = new Map<string, string>();
+  /** Re-renders once a second while a tool runs, so its runtime ticks without events. */
+  private ticker: ReturnType<typeof setInterval> | undefined;
 
   constructor(
     private tui: TUI,
@@ -212,6 +271,11 @@ export class ConversationViewer implements Component, Focusable {
     private onMarkdownMode?: (mode: ViewerMarkdownMode) => void,
     /** Pi's fullscreen scrollbar preference, captured when the observer opens. */
     scrollbarMode: ScrollViewScrollbar = "auto",
+    /**
+     * Pi's tool expansion state when the viewer opened. Toggled locally with
+     * pi's expand key afterwards, without touching the main transcript.
+     */
+    private toolsExpanded = false,
   ) {
     this.fullscreen = tui.mode === "fullscreen";
     this.markdownTheme = resolveMarkdownTheme(theme);
@@ -222,6 +286,12 @@ export class ConversationViewer implements Component, Focusable {
     }, { follow: "end", scrollbar: this.fullscreen ? scrollbarMode : "hidden" });
     this.unsubscribe = session.subscribe(event => {
       if (this.closed) return;
+      if (event.type === "tool_execution_update") {
+        const content = event.partialResult?.content;
+        this.partials.set(event.toolCallId, Array.isArray(content) ? extractText(content) : "");
+      } else if (event.type === "tool_execution_end") {
+        this.partials.delete(event.toolCallId);
+      }
       if (this.fullscreen && !this.scrollView.isFollowingEnd && event.type === "message_start" && ["user", "assistant", "toolResult", "bashExecution"].includes(event.message.role)) {
         this.newMessages++;
       }
@@ -281,6 +351,12 @@ export class ConversationViewer implements Component, Focusable {
       const next = MARKDOWN_MODES[(MARKDOWN_MODES.indexOf(this.markdownMode()) + 1) % MARKDOWN_MODES.length];
       this.markdownModeOverride = next;
       this.onMarkdownMode?.(next);
+      this.tui.requestRender();
+      return;
+    }
+    if (this.keys.toggleExpand(data)) {
+      this.stopArmed = false;
+      this.toolsExpanded = !this.toolsExpanded;
       this.tui.requestRender();
       return;
     }
@@ -393,6 +469,7 @@ export class ConversationViewer implements Component, Focusable {
   render(width: number): string[] {
     this.hitTargets = [];
     this.viewport = undefined;
+    this.updateTicker();
     const rows = Math.max(0, this.tui.terminal.rows);
     if (!this.fullscreen && width < 6) return []; // too narrow for any meaningful rendering
     if (width <= SCROLLBAR_WIDTH + 1) return Array.from({ length: rows }, () => " ".repeat(Math.max(0, width)));
@@ -660,8 +737,26 @@ export class ConversationViewer implements Component, Focusable {
 
   invalidate(): void { /* no cached state to clear */ }
 
+  /** Run the runtime ticker only while the agent has a tool in flight. */
+  private updateTicker(): void {
+    const running = this.record.status === "running"
+      && [...(this.record.toolTimings?.values() ?? [])].some(t => t.endedAt === undefined);
+    if (running && !this.ticker && !this.closed) {
+      this.ticker = setInterval(() => {
+        if (!this.closed) this.tui.requestRender();
+      }, 1000);
+    } else if (!running && this.ticker) {
+      clearInterval(this.ticker);
+      this.ticker = undefined;
+    }
+  }
+
   dispose(): void {
     this.closed = true;
+    if (this.ticker) {
+      clearInterval(this.ticker);
+      this.ticker = undefined;
+    }
     this.scrollView.setScrollbar("hidden"); // clears Pi's auto-hide timer
     if (this.unsubscribe) {
       this.unsubscribe();
@@ -708,6 +803,12 @@ export class ConversationViewer implements Component, Focusable {
     }
 
     const mode = this.markdownMode();
+    // Results rendered inside their call's block, so the loop below skips them.
+    const results = new Map<string, Extract<AgentSession["messages"][number], { role: "toolResult" }>>();
+    for (const msg of messages) {
+      if (msg.role === "toolResult") results.set(msg.toolCallId, msg);
+    }
+    const calledIds = new Set<string>();
     let needsSeparator = false;
     for (const msg of messages) {
       if (msg.role === "user") {
@@ -722,12 +823,10 @@ export class ConversationViewer implements Component, Focusable {
         }
       } else if (msg.role === "assistant") {
         const textParts: string[] = [];
-        const toolCalls: string[] = [];
+        const toolCalls: Extract<(typeof msg.content)[number], { type: "toolCall" }>[] = [];
         for (const c of msg.content) {
           if (c.type === "text" && c.text) textParts.push(c.text);
-          else if (c.type === "toolCall") {
-            toolCalls.push((c as any).name ?? (c as any).toolName ?? "unknown");
-          }
+          else if (c.type === "toolCall") toolCalls.push(c);
         }
         if (needsSeparator) lines.push(th.fg("dim", "───"));
         lines.push(th.bold("[Assistant]"));
@@ -737,29 +836,25 @@ export class ConversationViewer implements Component, Focusable {
             ? this.rawLines(text, width, false)
             : this.markdownLines(msg, text, width, false)));
         }
-        for (const name of toolCalls) {
-          lines.push(truncateToWidth(th.fg("muted", `  [Tool: ${name}]`), width));
+        for (const call of toolCalls) {
+          calledIds.add(call.id);
+          lines.push(...this.toolBlockLines(call.id, call.name, call.arguments, results.get(call.id), width));
         }
       } else if (msg.role === "toolResult") {
-        const { text, elided } = capResult(extractText(msg.content).trim());
-        if (!text) continue;
+        if (calledIds.has(msg.toolCallId)) continue;
+        // Orphaned from its call (e.g. compacted away): the result alone.
+        const output = this.toolOutputLines(msg, extractText(msg.content).trim(), previewsTail(msg.toolName), width, "");
+        if (output.length === 0) continue;
         if (needsSeparator) lines.push(th.fg("dim", "───"));
         lines.push(th.fg("dim", "[Result]"));
-        lines.push(...(mode === "all"
-          ? this.markdownLines(msg, text, width, true)
-          : this.rawLines(text, width, true)));
-        if (elided) lines.push(truncateToWidth(th.fg("dim", truncationNote(elided)), width));
+        lines.push(...output);
       } else if ((msg as any).role === "bashExecution") {
         const bash = msg as any;
         if (needsSeparator) lines.push(th.fg("dim", "───"));
         lines.push(truncateToWidth(th.fg("muted", `  $ ${bash.command}`), width));
-        if (bash.output?.trim()) {
-          // Same cap as a tool result, never Markdown: command output is the one
-          // thing here that is definitionally not authored as Markdown.
-          const { text, elided } = capResult(bash.output.trim());
-          lines.push(...this.rawLines(text, width, true));
-          if (elided) lines.push(truncateToWidth(th.fg("dim", truncationNote(elided)), width));
-        }
+        // Never Markdown: command output is the one thing here that is
+        // definitionally not authored as Markdown.
+        lines.push(...this.toolOutputLines(undefined, bash.output?.trim() ?? "", true, width, ""));
       } else {
         continue;
       }
@@ -774,5 +869,66 @@ export class ConversationViewer implements Component, Focusable {
     }
 
     return lines.map(l => truncateToWidth(l, width));
+  }
+
+  /** One tool call: header, arguments, then its result — or its live output while it runs. */
+  private toolBlockLines(
+    toolCallId: string,
+    toolName: string,
+    args: Record<string, unknown> | undefined,
+    result: Extract<AgentSession["messages"][number], { role: "toolResult" }> | undefined,
+    width: number,
+  ): string[] {
+    const th = this.theme;
+    const color = result?.isError ? "error" : "muted";
+    const header = toolHeader(toolName, args, this.record.toolTimings?.get(toolCallId));
+    const lines = [truncateToWidth(th.fg(color, `${TOOL_HEADER_INDENT}${header}`), width)];
+
+    // Arguments sit under the header in its color, aligned with the output.
+    const argText = formatToolArgs(toolName, args).trim();
+    if (argText) {
+      const argLines = this.toolsExpanded
+        ? wrapTextWithAnsi(argText, Math.max(1, width - TOOL_INDENT.length))
+        : [argText.split("\n")[0] + (argText.includes("\n") ? " …" : "")];
+      for (const line of argLines) lines.push(truncateToWidth(th.fg(color, TOOL_INDENT + line), width));
+    }
+
+    const text = result ? extractText(result.content).trim() : (this.partials.get(toolCallId) ?? "").trim();
+    lines.push(...this.toolOutputLines(result, text, previewsTail(toolName), width, TOOL_INDENT));
+    return lines;
+  }
+
+  /**
+   * Tool output, capped at `RESULT_MAX_CHARS` and, while collapsed, at
+   * `TOOL_PREVIEW_LINES` rendered lines — with a line saying how many are
+   * hidden and which key shows them. `msg` keys the Markdown cache; without
+   * one (live output, `!` commands) the text takes the literal path.
+   */
+  private toolOutputLines(msg: AgentSession["messages"][number] | undefined, raw: string, fromEnd: boolean, width: number, indent: string): string[] {
+    if (!raw) return [];
+    const th = this.theme;
+    const innerW = Math.max(1, width - indent.length);
+    const { text, elided } = capResult(raw, fromEnd);
+    let lines = msg && this.markdownMode() === "all"
+      ? this.markdownLines(msg, text, innerW, true)
+      : this.rawLines(text, innerW, true);
+    let hidden = 0;
+    if (!this.toolsExpanded && lines.length > TOOL_PREVIEW_LINES) {
+      hidden = lines.length - TOOL_PREVIEW_LINES;
+      lines = fromEnd ? lines.slice(-TOOL_PREVIEW_LINES) : lines.slice(0, TOOL_PREVIEW_LINES);
+    }
+    const out = lines.map(l => indent + l);
+    const note = (s: string) => truncateToWidth(th.fg("dim", indent + s), width);
+    if (hidden > 0) {
+      const prompt = note(`… ${hidden} ${fromEnd ? "earlier" : "more"} line${hidden === 1 ? "" : "s"} hidden · ${this.keys.expandKeyLabel} to expand`);
+      if (fromEnd) out.unshift(prompt);
+      else out.push(prompt);
+    }
+    // Only meaningful when expanded: collapsed, the hidden-lines prompt already covers it.
+    if (elided && this.toolsExpanded) {
+      if (fromEnd) out.unshift(note(truncationNote(elided, true)));
+      else out.push(note(truncationNote(elided)));
+    }
+    return out;
   }
 }

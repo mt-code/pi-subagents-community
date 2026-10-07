@@ -38,6 +38,7 @@ export type FleetUICtx = {
   onTerminalInput(handler: (data: string) => { consume?: boolean; data?: string } | undefined): () => void;
   getEditorText(): string;
   notify(message: string, type?: "info" | "warning" | "error"): void;
+  getToolsExpanded?(): boolean;
   custom<T>(
     factory: (tui: any, theme: Theme, keybindings: any, done: (result: T) => void) => { render(width: number): string[]; invalidate(): void; dispose?(): void },
     options?: { overlay?: boolean; overlayOptions?: unknown; onHandle?: (handle: unknown) => void },
@@ -429,6 +430,7 @@ export class FleetList {
           this.viewerMarkdown,
           this.onViewerMarkdown,
           this.scrollbarMode(),
+          this.ui?.getToolsExpanded?.() ?? false,
         );
       },
       {

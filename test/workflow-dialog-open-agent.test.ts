@@ -53,6 +53,7 @@ function overlayCtx() {
   const context = ctx({
     ui: {
       notify: vi.fn(),
+      getToolsExpanded: () => false,
       select: vi.fn(async (title: string, options: string[]) => {
         if (title !== "Agents" || entryTaken) return undefined;
         entryTaken = true;
