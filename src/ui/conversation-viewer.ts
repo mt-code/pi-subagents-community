@@ -9,10 +9,11 @@ import { type AgentSession, getMarkdownTheme } from "@earendil-works/pi-coding-a
 import { type Component, type Focusable, Input, Markdown, type MarkdownOptions, type MarkdownTheme, matchesKey, type OverlayOptions, ScrollView, type ScrollViewScrollbar, type TUI, type TuiMouseEvent, type TuiMouseEventResult, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { renderAgentName } from "../agent-color.js";
 import { extractText } from "../context.js";
-import type { AgentRecord, ToolTiming, ViewerMarkdownMode } from "../types.js";
+import type { AgentRecord, ViewerMarkdownMode } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent } from "../usage.js";
 import type { Theme } from "./agent-widget.js";
-import { type AgentActivity, buildInvocationTags, describeActivity, fgPreservingNestedStyles, formatCost, formatDuration, formatMs, formatSessionTokens, getPromptModeLabel } from "./agent-widget.js";
+import { type AgentActivity, buildInvocationTags, describeActivity, fgPreservingNestedStyles, formatCost, formatDuration, formatSessionTokens, getPromptModeLabel } from "./agent-widget.js";
+import { collapseOutput, previewsTail, renderToolCall, TOOL_INDENT } from "./tool-block.js";
 import { createViewerKeys, type ViewerKeybindings, type ViewerKeys } from "./viewer-keys.js";
 
 /** Base lines consumed by chrome: top border + header + header sep + footer sep + footer + bottom border. */
@@ -21,6 +22,8 @@ const MIN_VIEWPORT = 3;
 /** Height ceiling shared by the overlay's `maxHeight` and the viewer's internal viewport cap. */
 export const VIEWPORT_HEIGHT_PCT = 70;
 const SCROLLBAR_WIDTH = 1;
+/** One column per character, no escapes: a line this matches is as wide as it is long. */
+const PRINTABLE_ASCII = /^[\x20-\x7e]*$/;
 
 /** What a click on a recorded span does: send a key, jump to the end, or place the composer cursor. */
 type HitAction = { key: string } | { latest: true } | { composer: true };
@@ -45,15 +48,6 @@ export function getConversationOverlayOptions(tui: Pick<TUI, "mode">): OverlayOp
  * most real results mid-sentence.
  */
 export const RESULT_MAX_CHARS = 16_000;
-
-/** Lines of tool output shown while tool output is collapsed. */
-export const TOOL_PREVIEW_LINES = 3;
-
-/** Indent of a tool block's `[Tool …]` header. */
-const TOOL_HEADER_INDENT = "  ";
-
-/** Indent of a tool block's arguments and output under its header. */
-const TOOL_INDENT = "    ";
 
 /** Cycle order for the viewer's `m` key. */
 const MARKDOWN_MODES: readonly ViewerMarkdownMode[] = ["off", "assistant", "all"];
@@ -159,46 +153,6 @@ function humanCount(n: number): string {
 
 function truncationNote(elided: number, fromEnd = false): string {
   return `... (truncated, ${humanCount(elided)} ${fromEnd ? "earlier" : "more"} character${elided === 1 ? "" : "s"})`;
-}
-
-/** Shell output previews its tail, like pi's own bash renderer; everything else its head. */
-function previewsTail(toolName: string): boolean {
-  return toolName === "bash";
-}
-
-/**
- * The summary of a call's arguments shown under its header: the
- * command for bash, the path or pattern for the file tools, compact JSON for
- * anything else.
- */
-function formatToolArgs(toolName: string, args: Record<string, unknown> | undefined): string {
-  if (!args) return "";
-  const str = (key: string) => typeof args[key] === "string" ? args[key] as string : undefined;
-  switch (toolName) {
-    case "bash": return str("command") ?? "";
-    case "read":
-    case "write":
-    case "edit": return str("path") ?? "";
-    case "grep":
-    case "find":
-    case "ls": return [str("pattern"), str("path")].filter(Boolean).join("  ");
-    default: {
-      const json = JSON.stringify(args);
-      return json === "{}" ? "" : json;
-    }
-  }
-}
-
-/**
- * `[Tool Bash · 1.0s · 15s timeout]` — runtime only once timing is known. Bash
- * always states its timeout, `no timeout` included: pi's bash has no default,
- * so an absent value means the command can run forever.
- */
-function toolHeader(toolName: string, args: Record<string, unknown> | undefined, timing: ToolTiming | undefined): string {
-  const parts = [`Tool ${toolName.charAt(0).toUpperCase()}${toolName.slice(1)}`];
-  if (timing) parts.push(formatMs((timing.endedAt ?? Date.now()) - timing.startedAt));
-  if (toolName === "bash") parts.push(typeof args?.timeout === "number" ? `${args.timeout}s timeout` : "no timeout");
-  return `[${parts.join(" · ")}]`;
 }
 
 export class ConversationViewer implements Component, Focusable {
@@ -868,7 +822,13 @@ export class ConversationViewer implements Component, Focusable {
       lines.push(truncateToWidth(th.fg("accent", "▍ ") + th.fg("dim", act), width));
     }
 
-    return lines.map(l => truncateToWidth(l, width));
+    // Clamp only what overflows. `truncateToWidth` returns a fitting line
+    // unchanged, but reaching that answer takes its slow grapheme path on any
+    // line with an escape or non-ASCII character — every themed line — so on a
+    // styled transcript this map was most of the render. Plain short lines are
+    // settled by the regex; the rest by `visibleWidth`, which is cached.
+    return lines.map(l =>
+      (l.length <= width && PRINTABLE_ASCII.test(l)) || visibleWidth(l) <= width ? l : truncateToWidth(l, width));
   }
 
   /** One tool call: header, arguments, then its result — or its live output while it runs. */
@@ -879,55 +839,32 @@ export class ConversationViewer implements Component, Focusable {
     result: Extract<AgentSession["messages"][number], { role: "toolResult" }> | undefined,
     width: number,
   ): string[] {
-    const th = this.theme;
-    const color = result?.isError ? "error" : "muted";
-    const header = toolHeader(toolName, args, this.record.toolTimings?.get(toolCallId));
-    const lines = [truncateToWidth(th.fg(color, `${TOOL_HEADER_INDENT}${header}`), width)];
-
-    // Arguments sit under the header in its color, aligned with the output.
-    const argText = formatToolArgs(toolName, args).trim();
-    if (argText) {
-      const argLines = this.toolsExpanded
-        ? wrapTextWithAnsi(argText, Math.max(1, width - TOOL_INDENT.length))
-        : [argText.split("\n")[0] + (argText.includes("\n") ? " …" : "")];
-      for (const line of argLines) lines.push(truncateToWidth(th.fg(color, TOOL_INDENT + line), width));
-    }
-
+    const timing = this.record.toolTimings?.get(toolCallId);
     const text = result ? extractText(result.content).trim() : (this.partials.get(toolCallId) ?? "").trim();
-    lines.push(...this.toolOutputLines(result, text, previewsTail(toolName), width, TOOL_INDENT));
-    return lines;
+    return [
+      ...renderToolCall({ name: toolName, args, timing, isError: !!result?.isError }, this.toolsExpanded, width, this.theme),
+      ...this.toolOutputLines(result, text, previewsTail(toolName), width, TOOL_INDENT),
+    ];
   }
 
   /**
-   * Tool output, capped at `RESULT_MAX_CHARS` and, while collapsed, at
-   * `TOOL_PREVIEW_LINES` rendered lines — with a line saying how many are
-   * hidden and which key shows them. `msg` keys the Markdown cache; without
-   * one (live output, `!` commands) the text takes the literal path.
+   * Tool output, capped at `RESULT_MAX_CHARS` and collapsed by `collapseOutput`.
+   * `msg` keys the Markdown cache; without one (live output, `!` commands) the
+   * text takes the literal path.
    */
   private toolOutputLines(msg: AgentSession["messages"][number] | undefined, raw: string, fromEnd: boolean, width: number, indent: string): string[] {
     if (!raw) return [];
-    const th = this.theme;
     const innerW = Math.max(1, width - indent.length);
     const { text, elided } = capResult(raw, fromEnd);
-    let lines = msg && this.markdownMode() === "all"
-      ? this.markdownLines(msg, text, innerW, true)
-      : this.rawLines(text, innerW, true);
-    let hidden = 0;
-    if (!this.toolsExpanded && lines.length > TOOL_PREVIEW_LINES) {
-      hidden = lines.length - TOOL_PREVIEW_LINES;
-      lines = fromEnd ? lines.slice(-TOOL_PREVIEW_LINES) : lines.slice(0, TOOL_PREVIEW_LINES);
-    }
-    const out = lines.map(l => indent + l);
-    const note = (s: string) => truncateToWidth(th.fg("dim", indent + s), width);
-    if (hidden > 0) {
-      const prompt = note(`… ${hidden} ${fromEnd ? "earlier" : "more"} line${hidden === 1 ? "" : "s"} hidden · ${this.keys.expandKeyLabel} to expand`);
-      if (fromEnd) out.unshift(prompt);
-      else out.push(prompt);
-    }
+    const out = collapseOutput(
+      msg && this.markdownMode() === "all" ? this.markdownLines(msg, text, innerW, true) : this.rawLines(text, innerW, true),
+      { expanded: this.toolsExpanded, fromEnd, expandKeyLabel: this.keys.expandKeyLabel, indent, theme: this.theme },
+    );
     // Only meaningful when expanded: collapsed, the hidden-lines prompt already covers it.
     if (elided && this.toolsExpanded) {
-      if (fromEnd) out.unshift(note(truncationNote(elided, true)));
-      else out.push(note(truncationNote(elided)));
+      const note = truncateToWidth(this.theme.fg("dim", indent + truncationNote(elided, fromEnd)), width);
+      if (fromEnd) out.unshift(note);
+      else out.push(note);
     }
     return out;
   }

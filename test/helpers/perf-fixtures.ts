@@ -33,6 +33,16 @@ export const perfTheme = {
   bold: (text: string) => text,
 } as any;
 
+/**
+ * A theme that styles like pi's: every `fg`/`bold` wraps the text in SGR. For
+ * the paths whose cost depends on escapes being present — width measurement
+ * and truncation take a slower route on any line carrying one.
+ */
+export const styledPerfTheme = {
+  fg: (_color: string, text: string) => `\x1b[38;5;240m${text}\x1b[39m`,
+  bold: (text: string) => `\x1b[1m${text}\x1b[22m`,
+} as any;
+
 /** Frozen "now". Every timestamp below hangs off this — see the header. */
 export const NOW = Date.now();
 
@@ -258,13 +268,14 @@ export function mountViewer(
   session: any,
   record: unknown = makeRecord(0),
   markdownMode?: () => string,
+  theme: unknown = perfTheme,
 ) {
   const viewer = new Viewer(
     perfTui(120, 40),
     session,
     record,
     undefined,
-    perfTheme,
+    theme,
     () => {},
     undefined,
     undefined,
