@@ -111,6 +111,23 @@ function occupiesPoolSlot(
 }
 
 /**
+ * Count a finished tool and stamp its per-call timing, which the conversation
+ * viewer reads for its `[Tool Bash · 1.0s]` headers. On the record rather than
+ * the viewer because the viewer can be opened after the tools ran.
+ */
+function recordToolActivity(record: AgentRecord, activity: ToolActivity): void {
+  if (activity.type === "end") record.toolUses++;
+  if (!activity.toolCallId) return;
+  record.toolTimings ??= new Map();
+  const timings = record.toolTimings;
+  if (activity.type === "start") timings.set(activity.toolCallId, { startedAt: Date.now() });
+  else {
+    const timing = timings.get(activity.toolCallId);
+    if (timing) timing.endedAt = Date.now();
+  }
+}
+
+/**
  * Whether a record is one of the session's own agents, rather than something
  * another agent or a workflow owns.
  *
@@ -780,7 +797,7 @@ export class AgentManager {
       configCwd: options.configCwd ?? (customCwd !== undefined ? ctx.cwd : undefined),
       signal: record.abortController!.signal,
       onToolActivity: (activity) => {
-        if (activity.type === "end") record.toolUses++;
+        recordToolActivity(record, activity);
         options.onToolActivity?.(activity);
       },
       onTurnEnd: options.onTurnEnd,
@@ -1164,7 +1181,7 @@ export class AgentManager {
     try {
       const { text, failure } = await resumeAgent(record.session, prompt, {
         onToolActivity: (activity) => {
-          if (activity.type === "end") record.toolUses++;
+          recordToolActivity(record, activity);
           options?.onToolActivity?.(activity);
         },
         onAssistantUsage: (usage) => {
@@ -1255,7 +1272,7 @@ export class AgentManager {
 
     const promise = resumeAgent(record.session, prompt, {
       onToolActivity: (activity) => {
-        if (activity.type === "end") record.toolUses++;
+        recordToolActivity(record, activity);
         options.onToolActivity?.(activity);
       },
       onAssistantUsage: (usage) => {

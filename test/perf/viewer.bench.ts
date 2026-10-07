@@ -22,7 +22,7 @@
  */
 import { bench, describe } from "vitest";
 import { ConversationViewer } from "../../src/ui/conversation-viewer.js";
-import { makeSession, mountViewer } from "../helpers/perf-fixtures.js";
+import { makeSession, mountViewer, styledPerfTheme } from "../helpers/perf-fixtures.js";
 
 const SIZES = [50, 500, 5000];
 
@@ -30,6 +30,19 @@ describe("ConversationViewer.render — markdown: assistant (default)", () => {
   for (const n of SIZES) {
     const viewer = mountViewer(ConversationViewer, makeSession(n));
     viewer.render(120); // prime: first frame parses, the measured ones reuse
+    bench(`${n} messages`, () => {
+      viewer.render(120);
+    });
+  }
+});
+
+// The identity theme above leaves every line plain ASCII, which is the cheapest
+// case for width measurement and truncation. Pi's theme wraps each line in
+// escapes, and those take the slow route — so this is the number a user sees.
+describe("ConversationViewer.render — markdown: assistant, styled theme", () => {
+  for (const n of SIZES) {
+    const viewer = mountViewer(ConversationViewer, makeSession(n), undefined, undefined, styledPerfTheme);
+    viewer.render(120);
     bench(`${n} messages`, () => {
       viewer.render(120);
     });

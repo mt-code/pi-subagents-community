@@ -119,6 +119,35 @@ describe("AgentManager — Bug 1 race condition (resultConsumed vs onComplete)",
   });
 });
 
+describe("AgentManager — per-call tool timings", () => {
+  let manager: AgentManager;
+  afterEach(() => manager?.dispose());
+
+  it("stamps start and end on the record, keyed by toolCallId", async () => {
+    manager = new AgentManager();
+    let midRun: { startedAt: number; endedAt?: number } | undefined;
+    let id = "";
+    vi.mocked(runAgent).mockImplementation(async (_ctx, _type, _prompt, opts: any) => {
+      await Promise.resolve(); // let spawn() hand out the id first
+      opts.onToolActivity?.({ type: "start", toolName: "bash", toolCallId: "call-1" });
+      midRun = { ...manager.getRecord(id)!.toolTimings!.get("call-1")! };
+      opts.onToolActivity?.({ type: "end", toolName: "bash", toolCallId: "call-1" });
+      // Synthetic error entries carry no id and must not create a timing.
+      opts.onToolActivity?.({ type: "end", toolName: "extension-error:x" });
+      return { responseText: "done", session: mockSession(), aborted: false, steered: false };
+    });
+
+    const result = await manager.spawnAndWait(mockPi, mockCtx, "general-purpose", "test", { description: "test" }, (fgId) => { id = fgId; });
+    const timing = result.record.toolTimings?.get("call-1");
+
+    expect(midRun?.startedAt).toEqual(expect.any(Number));
+    expect(midRun?.endedAt).toBeUndefined();
+    expect(timing?.endedAt).toBeGreaterThanOrEqual(timing!.startedAt);
+    expect(result.record.toolTimings?.size).toBe(1);
+    expect(result.record.toolUses).toBe(2);
+  });
+});
+
 describe("AgentManager — spawnAndWait onSpawned + foreground output file wiring (#105)", () => {
   let manager: AgentManager;
   afterEach(() => manager?.dispose());
