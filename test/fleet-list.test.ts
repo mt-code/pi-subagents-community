@@ -47,7 +47,7 @@ function plain(row: string): string {
 }
 
 /** A no-op session so a record is "openable" by default (the list hides session-less agents). */
-const FAKE_SESSION = { subscribe: () => () => {}, messages: [] };
+const FAKE_SESSION = { subscribe: () => () => {}, state: {}, messages: [] };
 
 function makeRecord(over: Partial<AgentRecord> = {}): AgentRecord {
   return {
@@ -515,7 +515,7 @@ describe("FleetList overlay lifecycle", () => {
   });
 
   it("keeps the cursor on the viewed agent after closing, even if the list reordered", async () => {
-    const fakeSession = { subscribe: () => () => {}, messages: [] };
+    const fakeSession = { subscribe: () => () => {}, state: {}, messages: [] };
     const agents = [
       makeRecord({ id: "a1", description: "one", session: fakeSession as any }),
       makeRecord({ id: "a2", description: "two", session: fakeSession as any }),

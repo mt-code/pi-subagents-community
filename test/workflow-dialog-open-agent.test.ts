@@ -27,6 +27,7 @@ import { ctx, type Hermetic, hermeticDir, makePi } from "./helpers/boot-extensio
 const fakeSession = () => ({
   dispose: vi.fn(),
   subscribe: vi.fn(() => vi.fn()),
+  state: {},
   messages: [],
   getSessionStats: () => ({ tokens: { input: 0, output: 0, cacheWrite: 0 } }),
 });

@@ -65,6 +65,7 @@ export function perfSession(messages: unknown[] = []) {
   return {
     messages,
     subscribe: () => () => {},
+    state: {},
     dispose: () => {},
     getSessionStats: () => ({
       tokens: { input: 12_000, output: 3_000, cacheWrite: 500 },
@@ -194,6 +195,7 @@ export function makeSession(n: number) {
   return {
     messages,
     subscribe: () => () => {},
+    state: {},
     dispose: () => {},
     getSessionStats: () => ({ tokens: { input: 0, output: 0, cacheWrite: 0 } }),
   } as any;

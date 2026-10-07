@@ -10,7 +10,7 @@ function setup(rows = 20, columns = 100, host?: TUI, scrollbar: ScrollViewScroll
   const messages = [{ role: "user", content: Array.from({ length: 100 }, (_, i) => `row-${i.toString().padStart(3, "0")}`).join("\n") }];
   const unsubscribe = vi.fn();
   let listener: AgentSessionEventListener = () => {};
-  const session = { messages, subscribe: (onEvent: AgentSessionEventListener) => { listener = onEvent; return unsubscribe; } } as unknown as AgentSession;
+  const session = { messages, state: {}, subscribe: (onEvent: AgentSessionEventListener) => { listener = onEvent; return unsubscribe; } } as unknown as AgentSession;
   const record = { type: "Explore", description: "Observe only", status: "running", toolUses: 0, startedAt: Date.now() } as AgentRecord;
   const done = vi.fn();
   const stop = vi.fn();

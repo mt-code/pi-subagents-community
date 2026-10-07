@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderRunningAgentStatus } from "../src/index.js";
 import type { WidgetMode } from "../src/types.js";
-import { type AgentActivity, AgentWidget, fgPreservingNestedStyles, formatCost, formatSessionTokens } from "../src/ui/agent-widget.js";
+import { type AgentActivity, AgentWidget, describeActivity, fgPreservingNestedStyles, formatCost, formatSessionTokens } from "../src/ui/agent-widget.js";
 
 describe("formatSessionTokens", () => {
   const theme = { fg: (c: string, s: string) => `<${c}>${s}</${c}>`, bold: (s: string) => s };
@@ -45,11 +45,11 @@ describe("formatSessionTokens", () => {
 describe("renderRunningAgentStatus", () => {
   it("renders running status as separate component lines", () => {
     const theme = { fg: (_c: string, s: string) => s };
-    const component = renderRunningAgentStatus("⠋", "thinking: xhigh · 4 tool uses", "thinking…", theme);
+    const component = renderRunningAgentStatus("⠋", "thinking: xhigh · 4 tool uses", "Thinking", theme);
 
     expect(component.render(120).map((line) => line.trimEnd())).toEqual([
       "⠋ thinking: xhigh · 4 tool uses",
-      "  ⎿  thinking…",
+      "  ⎿  Thinking",
     ]);
   });
 });
@@ -524,5 +524,11 @@ describe("AgentWidget overflow accounting", () => {
     agent.status = "completed";
     widget.markFinished(agent.id);
     expect(render()).toContain("resumed description");
+  });
+});
+
+describe("describeActivity", () => {
+  it("reads Thinking with no tool running and no text streamed", () => {
+    expect(describeActivity(new Map(), "")).toBe("Thinking");
   });
 });

@@ -135,7 +135,7 @@ describe("maxConcurrentForeground, through the Agent tool", () => {
     expect(runAgent).toHaveBeenCalledTimes(1);
   });
 
-  // "thinking…" would be a lie for an agent that has not started and may not
+  // "Thinking" would be a lie for an agent that has not started and may not
   // for minutes. The row keeps its spinner either way — a status the renderer
   // does not know falls through to raw text and reads as hung.
   it("says it is queued in the live tool result, then stops saying it", async () => {

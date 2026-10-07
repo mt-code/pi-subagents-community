@@ -219,7 +219,7 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
       { fg: (_color: string, text: string) => text, bold: (text: string) => text },
     ).render().join("\n");
     expect(lines).toContain("running command…");
-    expect(lines).not.toContain("thinking…");
+    expect(lines).not.toContain("Thinking");
   });
 
   it("is idempotent — a second session_start does not re-advertise or double-register", async () => {

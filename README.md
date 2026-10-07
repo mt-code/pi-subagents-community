@@ -19,6 +19,7 @@ https://github.com/user-attachments/assets/8685261b-9338-4fea-8dfe-1c590d5df543
 - **Fullscreen conversation observer** — in Pi's fullscreen TUI mode, the conversation viewer fills the terminal with mouse wheel scrolling, a draggable scrollbar, a jump-to-latest indicator, and clickable footer actions. See [Fullscreen conversation observer](#fullscreen-conversation-observer). ([tintinweb/pi-subagents#357](https://github.com/tintinweb/pi-subagents/pull/357) — thanks [@sadiksaifi](https://github.com/sadiksaifi))
 - **Live tool output** — each tool call shows its runtime, timeout and arguments. Tool output is truncated to 3 lines but can be expanded.
 - **Optimised conversation viewer** — improved conversation viewer rendering when using styled themes.
+- **Thinking and assistant streaming** - added streaming of thinking and assistant messages in the subagent convesation viewer 
 
 ## Original Features
 

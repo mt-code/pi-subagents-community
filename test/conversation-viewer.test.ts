@@ -59,6 +59,7 @@ function mockSession(messages: any[] = []) {
   return {
     messages,
     subscribe: vi.fn(() => vi.fn()),
+    state: {},
     dispose: vi.fn(),
     getSessionStats: () => ({ tokens: { input: 0, output: 0, cacheWrite: 0 } }),
   } as any;
@@ -1097,5 +1098,92 @@ describe("ConversationViewer", () => {
         assertAllLinesFit(viewer.render(w), w);
       }
     });
+  });
+});
+
+describe("ConversationViewer thinking", () => {
+  const tagTheme = { fg: (c: string, t: string) => `<${c}>${t}`, bold: (t: string) => t } as any;
+  const idle = () => ({ activeTools: new Map(), toolUses: 0, turnCount: 1, responseText: "" }) as any;
+  const thinkingMsg = (thinking: string, text = "") => ({
+    role: "assistant",
+    content: [{ type: "thinking", thinking }, ...(text ? [{ type: "text", text }] : [])],
+  });
+
+  function viewerFor(opts: {
+    messages?: any[]; streaming?: any; hideThinking?: boolean; activity?: any; tui?: any; mode?: "off" | "assistant";
+  } = {}) {
+    const session = { ...mockSession(opts.messages ?? [{ role: "user", content: "go" }]), state: { streamingMessage: opts.streaming } };
+    return new ConversationViewer(
+      opts.tui ?? mockTui(200, 80), session, mockRecord({ status: "running" }), opts.activity ?? idle(),
+      tagTheme, vi.fn(), undefined, undefined, undefined, false, opts.mode ? () => opts.mode! : undefined,
+      undefined, undefined, false, opts.hideThinking ?? false,
+    );
+  }
+  const content = (viewer: any): string => (viewer.buildContentLines(76) as string[]).join("\n");
+
+  it("streams the in-flight message's thinking, styled as thinking", () => {
+    const out = content(viewerFor({ streaming: thinkingMsg("weighing the options") }));
+    expect(out).toContain("[Assistant]");
+    expect(out).toMatch(/<thinkingText>.*weighing the options/);
+  });
+
+  it("styles thinking the same on the literal path", () => {
+    const out = content(viewerFor({ streaming: thinkingMsg("weighing the options"), mode: "off" }));
+    expect(out).toContain("\x1b[3m<thinkingText>weighing the options\x1b[23m");
+  });
+
+  it("keeps a finished message's thinking ahead of its text", () => {
+    const out = content(viewerFor({ messages: [thinkingMsg("plan first", "the answer")] }));
+    expect(out.indexOf("plan first")).toBeGreaterThan(-1);
+    expect(out.indexOf("plan first")).toBeLessThan(out.indexOf("the answer"));
+  });
+
+  it("shows no thinking text when pi hides thinking blocks", () => {
+    const out = content(viewerFor({
+      messages: [thinkingMsg("finished secret", "the answer")], streaming: thinkingMsg("live secret"), hideThinking: true,
+    }));
+    expect(out).not.toContain("secret");
+    expect(out).toContain("the answer");
+    expect(out).toContain("<muted>Thinking");
+  });
+
+  it("shows the spinner and Thinking while no text has streamed yet", () => {
+    const lines = (viewerFor({ streaming: thinkingMsg("hmm") }) as any).buildContentLines(76) as string[];
+    expect(lines.at(-1)).toMatch(/^<accent>[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] <muted>Thinking$/);
+  });
+
+  it("drops the indicator once response text streams, and renders that text", () => {
+    const out = content(viewerFor({ streaming: thinkingMsg("hmm", "partial answer") }));
+    expect(out).toContain("partial answer");
+    expect(out).not.toContain("Thinking");
+  });
+
+  it("shows the tool activity line rather than Thinking while a tool runs", () => {
+    const activity = { ...idle(), activeTools: new Map([["k", "read"]]) };
+    const out = content(viewerFor({ activity }));
+    expect(out).toContain("reading…");
+    expect(out).not.toContain("Thinking");
+  });
+
+  it("animates the spinner at 80ms while thinking, and stops once text streams", () => {
+    vi.useFakeTimers();
+    try {
+      const tui = mockTui(200, 80);
+      const streaming = thinkingMsg("hmm");
+      const viewer = viewerFor({ tui, streaming });
+      viewer.render(80);
+      tui.requestRender.mockClear();
+      vi.advanceTimersByTime(800);
+      expect(tui.requestRender).toHaveBeenCalledTimes(10);
+
+      streaming.content.push({ type: "text", text: "answer" } as any);
+      viewer.render(80);
+      tui.requestRender.mockClear();
+      vi.advanceTimersByTime(800);
+      expect(tui.requestRender).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

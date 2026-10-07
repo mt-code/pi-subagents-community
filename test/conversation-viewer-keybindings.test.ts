@@ -33,6 +33,7 @@ function createViewer(keybindings?: ViewerKeybindings) {
   const session = {
     messages,
     subscribe: vi.fn(() => vi.fn()),
+    state: {},
   } as any;
   const record = {
     id: "test-1",

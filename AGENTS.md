@@ -133,7 +133,7 @@ Location: `CHANGELOG.md` (single file, [Keep a Changelog](https://keepachangelog
 Before a release:
 
 - Update `CHANGELOG.md` — move the `## [Unreleased]` entries under a new `## [X.Y.Z]` version section, and add a fresh empty `## [Unreleased]` for the next cycle.
-- Update `README.md` if user-facing behavior changed (features list, settings, usage), and the matching guide in `docs/` if the change touches workflows or the event/RPC surface.
+- Update `README.md` if user-facing behavior changed (community features list, settings, usage), and the matching guide in `docs/` if the change touches workflows or the event/RPC surface.
 - Run the full check suite plus the e2e tests, and fix anything that fails:
   ```bash
   npm run check                    # lint + typecheck + test
