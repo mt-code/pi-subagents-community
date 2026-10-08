@@ -1,17 +1,12 @@
-# @mt-code/pi-subagents-community
+## pi-subagents-community
 
-This is a community maintained version of [@tintinweb/pi-subagents](https://github.com/tintinweb/pi-subagents). See [Community Features](https://github.com/mt-code/pi-subagents-community#community-features) for the latest community changes. 
-
-## pi-subagents
+This is a community maintained version of [@tintinweb/pi-subagents](https://github.com/tintinweb/pi-subagents). See [Community Features](https://github.com/mt-code/pi-subagents-community#community-features) for the latest community changes.
 
 A [pi](https://pi.dev) extension that brings **Claude Code-style autonomous sub-agents and workflow orchestration** to pi. Spawn specialized agents that run in isolated sessions — each with its own tools, system prompt, model, and thinking level. Run them in the background (the default) or block on them, steer them mid-run, resume completed sessions, and define your own custom agent types. When the orchestration shouldn't be improvised, hand a deterministic JavaScript script to the `SubagentWorkflow` tool — `agent()`, `parallel()`, `pipeline()` — and scripts written for Claude Code's `Workflow` tool run here unchanged.
 
-<img width="600" alt="pi-subagents screenshot" src="https://github.com/tintinweb/pi-subagents/raw/master/media/screenshot.png" />
+<img width="800" alt="Subagent conversation viewer" src="https://github.com/mt-code/pi-subagents-community/raw/master/media/subagents-viewer.gif" />
 
-
-https://github.com/user-attachments/assets/8685261b-9338-4fea-8dfe-1c590d5df543
-
-<img width="600" alt="pi-color-badges-white" src="https://github.com/user-attachments/assets/555dcae4-333e-4ff0-b420-7b3369c018a4" />
+<img width="800" alt="FleetView" src="https://github.com/mt-code/pi-subagents-community/raw/master/media/subagents-fleetview.gif" />
 
 ## Community Features
 
@@ -55,8 +50,10 @@ https://github.com/user-attachments/assets/8685261b-9338-4fea-8dfe-1c590d5df543
 ## Install
 
 ```bash
-# npm package coming soon
+pi install npm:pi-subagents-community
 ```
+
+If you have upstream `@tintinweb/pi-subagents` installed, remove it first (`pi remove npm:@tintinweb/pi-subagents`) — both register the same tools. In `extensions:` lists, refer to this package as `[pi-subagents-community]`.
 
 Or load directly for development:
 

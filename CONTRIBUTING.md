@@ -1,4 +1,4 @@
-# Contributing to @tintinweb/pi-subagents
+# Contributing to pi-subagents-community
 
 This guide exists to save both sides time.
 
