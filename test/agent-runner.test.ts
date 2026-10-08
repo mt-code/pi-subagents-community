@@ -197,6 +197,7 @@ function createSession(finalText: string) {
 const ctx = {
   cwd: "/tmp",
   model: undefined,
+  isProjectTrusted: vi.fn(() => true),
   modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },
   getSystemPrompt: vi.fn(() => "parent prompt"),
   sessionManager: {
@@ -262,7 +263,7 @@ describe("agent-runner final output capture", () => {
       cwd: "/tmp/worktree",
       agentDir: "/mock/agent-dir",
     }));
-    expect(settingsManagerCreate).toHaveBeenCalledWith("/tmp/worktree", "/mock/agent-dir");
+    expect(settingsManagerCreate).toHaveBeenCalledWith("/tmp/worktree", "/mock/agent-dir", { projectTrusted: true });
     // Same claim as before `rememberAgents` flipped the default — the effective
     // cwd reaches the session manager — now via the persistent constructor.
     expect(sessionManagerCreate).toHaveBeenCalledWith("/tmp/worktree", undefined, expect.anything());
@@ -270,6 +271,22 @@ describe("agent-runner final output capture", () => {
       cwd: "/tmp/worktree",
       agentDir: "/mock/agent-dir",
     }));
+  });
+
+  it("inherits an untrusted project from the parent, in both the loader and the session", async () => {
+    // pi's SettingsManager defaults to trusted; a child that took the default would
+    // load the project's `.pi/` extensions and `.pi/mcp.json` servers the user never
+    // trusted.
+    const { session } = createSession("UNTRUSTED");
+    createAgentSession.mockResolvedValue({ session });
+
+    await runAgent({ ...ctx, isProjectTrusted: () => false }, "Explore", "go", { pi });
+
+    expect(settingsManagerCreate).toHaveBeenCalledOnce();
+    expect(settingsManagerCreate).toHaveBeenCalledWith("/tmp", "/mock/agent-dir", { projectTrusted: false });
+    const settingsManager = settingsManagerCreate.mock.results[0].value;
+    expect(lastLoaderOpts().settingsManager).toBe(settingsManager);
+    expect(createAgentSession.mock.calls[0][0].settingsManager).toBe(settingsManager);
   });
 
   it("forwards worktreeBase to the prompt builder, and omits it otherwise", async () => {

@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Subagents load pi's built-in `codemode`, `tool-search` and MCP extensions** ([#375](https://github.com/tintinweb/pi-subagents/pull/375) — thanks [@markphelps](https://github.com/markphelps)). pi's CLI passes them to its resource loader itself, and the child loader was built without them, so subagents had no `codemode`, no `tool_search`, and no MCP servers at all. `extensions: false`, `isolated` and `-builtin:<name>` in pi settings still leave them out.
 - **`extensions: [mcp]`, `exclude_extensions: [mcp]` and `ext:mcp` match pi's built-in extensions** ([#383](https://github.com/tintinweb/pi-subagents/pull/383) — thanks [@xulongwu4](https://github.com/xulongwu4)). pi loads them under `builtin:<name>` paths, which canonicalized to the whole string, so only the literal `builtin:mcp` matched.
 
+### Security
+- **Subagents and `@agent` mention clones follow the main session's project trust.** Both built their settings with pi's default, which trusts the project, so in a project the user had not trusted a subagent still loaded the project's `.pi/` extensions, packages and skills. With pi's built-in MCP extension now loaded in subagents, it would also have started the servers listed in the project's `.pi/mcp.json`. The child's loader and session now share one settings manager created with the parent's `isProjectTrusted()`.
+
 ## [0.19.0] - 2026-08-25
 
 > **⚠️ Breaking — this release requires pi 0.84.0 or newer** (`peerDependencies` moves from `>=0.81.0`). `SubagentWorkflow` needs two host APIs that do not exist below it, and both fail the typecheck rather than degrading quietly — see the `Changed` entry below for which, and why neither was worth reimplementing to hold the old floor. npm flags an older pi at install time.

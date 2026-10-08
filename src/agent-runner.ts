@@ -787,9 +787,16 @@ export async function runAgent(
           };
         };
 
+  // The child inherits the parent session's project-trust decision. pi's
+  // `SettingsManager.create` defaults to trusted, so without this a subagent in a
+  // project the user never trusted would load its `.pi/` extensions, packages and
+  // skills, and start the servers its `.pi/mcp.json` lists. One manager serves the
+  // loader and the session, so both see the same trust state.
+  const settingsManager = SettingsManager.create(configCwd, agentDir, { projectTrusted: ctx.isProjectTrusted() });
   const loader = new DefaultResourceLoader({
     cwd: configCwd,
     agentDir,
+    settingsManager,
     noExtensions,
     additionalExtensionPaths,
     extensionsOverride,
@@ -998,7 +1005,6 @@ export async function runAgent(
     sessionExcludeTools = [...denyTools];
   }
 
-  const settingsManager = SettingsManager.create(configCwd, agentDir);
   const configuredSessionDir = resolveConfiguredSessionDir(agentConfig?.sessionDir, effectiveCwd);
   const defaultSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR ?? settingsManager.getSessionDir?.();
   // Frontmatter wins when it says anything; otherwise the project default,
