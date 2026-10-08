@@ -298,10 +298,30 @@ export function installExtensionToolScope(
     return keep;
   };
 
+  // Tools the agent named itself: activated whenever in scope, as `--tools`
+  // activates a tool pi would otherwise leave off.
+  const named = new Set([...toolNames, ...readmitToolNames, ...[...narrowing.values()].flatMap((s) => [...s])]);
+
+  // The scope is a ceiling, not a loadout. Inside it, a tool is activated only
+  // when the agent named it, when it is already active, or when pi itself would
+  // activate it on registration (`direct`/`model-only` without `defaultActive:
+  // false`). Anything else pi registers off on purpose — `codemode` and
+  // `tool_search` until the MCP extension turns them on, `codemode`-exposed MCP
+  // tools that only scripts call — and forcing them on would declare every MCP
+  // tool to the model. `beforeToolCall` below still gates on the full scope, so
+  // codemode's nested calls reach them.
   const renarrow = () => {
     const allowed = inScope();
-    const next = session.getAllTools().map((t) => t.name).filter((n) => allowed.has(n));
     const current = session.getActiveToolNames();
+    const active = new Set(current);
+    const next = session.getAllTools()
+      .filter((t) => allowed.has(t.name) && (
+        named.has(t.name)
+        || active.has(t.name)
+        || ((t.exposure === "direct" || t.exposure === "model-only")
+          && session.getToolDefinition(t.name)?.defaultActive !== false)
+      ))
+      .map((t) => t.name);
     // setActiveToolsByName unconditionally rebuilds the system prompt, so skip
     // the no-op that steady-state turns would otherwise pay for every turn.
     if (next.length !== current.length || next.some((n, i) => n !== current[i])) {
