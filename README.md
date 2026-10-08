@@ -19,7 +19,8 @@ https://github.com/user-attachments/assets/8685261b-9338-4fea-8dfe-1c590d5df543
 - **Fullscreen conversation observer** — in Pi's fullscreen TUI mode, the conversation viewer fills the terminal with mouse wheel scrolling, a draggable scrollbar, a jump-to-latest indicator, and clickable footer actions. See [Fullscreen conversation observer](#fullscreen-conversation-observer). ([tintinweb/pi-subagents#357](https://github.com/tintinweb/pi-subagents/pull/357) — thanks [@sadiksaifi](https://github.com/sadiksaifi))
 - **Live tool output** — each tool call shows its runtime, timeout and arguments. Tool output is truncated to 3 lines but can be expanded.
 - **Optimised conversation viewer** — improved conversation viewer rendering when using styled themes.
-- **Thinking and assistant streaming** - added streaming of thinking and assistant messages in the subagent convesation viewer 
+- **Thinking and assistant streaming** - added streaming of thinking and assistant messages in the subagent conversation viewer 
+- **Thinking level inheritance** — subagents run at the spawning session's thinking level unless the caller or the agent file sets one, instead of falling back to pi's `defaultThinkingLevel`. ([tintinweb/pi-subagents#306](https://github.com/tintinweb/pi-subagents/pull/306) — thanks [@luongnv89](https://github.com/luongnv89))
 
 ## Original Features
 
@@ -338,7 +339,7 @@ All fields are optional — sensible defaults for everything.
 | `disallowed_tools` | — | Comma-separated tools to deny even if extensions provide them |
 | `isolation` | — | Set to `worktree` to run in an isolated git worktree, or `off` to refuse one even when the caller passes `isolation: "worktree"` (frontmatter is authoritative). `none`, `no`, and `false` are accepted spellings of `off` |
 | `model` | inherit parent | Model — `provider/modelId` or fuzzy name (`"haiku"`, `"sonnet"`). Resolved tolerantly (`.`/`-` and a trailing date stamp are interchangeable) and falls back to the same model under another provider if the named one doesn't have it |
-| `thinking` | inherit | off, minimal, low, medium, high, xhigh, max — actual availability depends on your pi version and model; pi clamps unsupported levels down |
+| `thinking` | inherit parent session level | off, minimal, low, medium, high, xhigh, max — actual availability depends on your pi version and model; pi clamps unsupported levels down |
 | `max_turns` | unlimited | Max agentic turns before graceful shutdown. `0` or omit for unlimited |
 | `persist_session` | `subagents.json` `rememberAgents` (default `true`) | Persist this subagent as a normal pi session instead of keeping the session in memory only; overrides the `rememberAgents` project default in both directions. It records its spawning session as parent, so it nests under it in `/resume`. The subagent's `.output` transcript is still written either way unless `output_transcript: false` |
 | `output_transcript` | `true` (or `subagents.json` `outputTranscript`) | Write this subagent's `.output` transcript; when set, overrides the `subagents.json` `outputTranscript` default. Set `false` to write no transcript file or path. Governs only the transcript — independent of `persist_session`, `isolation: worktree`, and `memory:` |
