@@ -33,6 +33,11 @@ const {
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({
   createAgentSession,
+  // Factories for pi's built-in extensions; each returns a tagged stub so the
+  // loader option can be asserted entry by entry.
+  createCodemodeExtension: () => "codemode-factory",
+  createToolSearchExtension: () => "tool-search-factory",
+  createMcpExtension: () => "mcp-factory",
   // Identity, as pi's own is: `defineTool` exists for the type inference, and
   // the structured-output tool is built through it.
   defineTool: (definition: unknown) => definition,
@@ -1695,6 +1700,26 @@ describe("agent-runner async extension tool registration", () => {
     expect(createAgentSession.mock.calls[0][0].tools).toEqual(["read"]);
     expect(session.setActiveToolsByName).not.toHaveBeenCalled();
     expect(session.agent.beforeToolCall).toBeUndefined();
+  });
+});
+
+// ─── pi's built-in extensions (codemode, tool-search, MCP) ─────────────
+// pi's CLI passes these to its loader as `extensionFactories`; a child loader
+// built without them never loads `builtin:codemode` or `builtin:mcp`.
+
+describe("pi built-in extensions in the child loader", () => {
+  it("hands the CLI's built-in entries to the child's resource loader", async () => {
+    vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: true }));
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ extensions: true }));
+    createAgentSession.mockResolvedValue({ session: createSession("OK").session });
+
+    await runAgent(ctx, "Explore", "go", { pi });
+
+    expect(lastLoaderOpts().extensionFactories).toEqual([
+      { name: "codemode", factory: "codemode-factory", replaceable: true, builtin: true },
+      { name: "tool-search", factory: "tool-search-factory", replaceable: true, builtin: true },
+      { name: "mcp", factory: "mcp-factory", replaceable: true, builtin: true },
+    ]);
   });
 });
 

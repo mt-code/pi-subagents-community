@@ -6,11 +6,14 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
-import type { ExtensionContext, LoadExtensionsResult, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, InlineExtension, LoadExtensionsResult, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
   type AgentSession,
   type AgentSessionEvent,
   createAgentSession,
+  createCodemodeExtension,
+  createMcpExtension,
+  createToolSearchExtension,
   DefaultResourceLoader,
   type ExtensionAPI,
   getAgentDir,
@@ -46,6 +49,22 @@ export const SUBAGENT_TOOL_NAMES = {
 
 /** Names of tools registered by this extension that subagents must NOT inherit. */
 const EXCLUDED_TOOL_NAMES: string[] = Object.values(SUBAGENT_TOOL_NAMES);
+
+/**
+ * pi's built-in codemode, tool-search and MCP extensions, as its CLI hands them to
+ * the resource loader. They only exist when passed in as `extensionFactories` — an
+ * SDK-built loader gets none of them — so without this a subagent has no `codemode`
+ * and no MCP servers. Entries mirror the CLI's (`builtin: true` loads them as
+ * `builtin:<name>`, honouring `-builtin:<name>` and `noExtensions`; `replaceable`
+ * lets a third-party MCP extension take over). The CLI's llama.cpp entry is not
+ * exported, so it is left out. Shared across spawns like the CLI's list: each
+ * factory keeps its state per `(pi) => …` call, not per factory.
+ */
+const PI_BUILTIN_EXTENSIONS: InlineExtension[] = [
+  { name: "codemode", factory: createCodemodeExtension(), replaceable: true, builtin: true },
+  { name: "tool-search", factory: createToolSearchExtension(), replaceable: true, builtin: true },
+  { name: "mcp", factory: createMcpExtension(), replaceable: true, builtin: true },
+];
 
 /**
  * Canonical name of an extension for `extensions: [...]` allowlist matching.
@@ -752,6 +771,7 @@ export async function runAgent(
     noExtensions,
     additionalExtensionPaths,
     extensionsOverride,
+    extensionFactories: PI_BUILTIN_EXTENSIONS,
     noSkills,
     noPromptTemplates: true,
     noThemes: true,
