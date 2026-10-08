@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-10-09
+
+### Fixed
+- **`typebox` and `@sinclair/typebox` are now peer dependencies (`"*"`) instead of dependencies** ([#367](https://github.com/tintinweb/pi-subagents/pull/367) — thanks [@ahati](https://github.com/ahati)). pi supplies both to extensions and warned at load that installed copies can bypass its module mapping and create a duplicate TypeBox runtime. They stay in `devDependencies` for typecheck and tests.
+
 ## [0.20.0] - 2026-10-08
 
 > **⚠️ Breaking — requires pi 1.0.0 or newer** (`peerDependencies` moves from `>=0.84.0`). Upgrade pi before updating this extension.
