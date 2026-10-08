@@ -22,7 +22,7 @@ https://github.com/user-attachments/assets/8685261b-9338-4fea-8dfe-1c590d5df543
 - **Thinking and assistant streaming** - added streaming of thinking and assistant messages in the subagent conversation viewer 
 - **Thinking level inheritance** — subagents run at the spawning session's thinking level unless the caller or the agent file sets one, instead of falling back to pi's `defaultThinkingLevel`. ([tintinweb/pi-subagents#306](https://github.com/tintinweb/pi-subagents/pull/306) — thanks [@luongnv89](https://github.com/luongnv89))
 - **Faster startup** — pi loads the compiled `dist/` entry instead of transpiling `src/` on every boot; git installs build `dist/` through a `prepare` script. ([tintinweb/pi-subagents#279](https://github.com/tintinweb/pi-subagents/pull/279) — thanks [@tobymao](https://github.com/tobymao))
-- **Per-message subagent usage events** — `subagents:usage` reports each assistant message's spend for every agent (top-level, nested, and workflow children) with its type, model, and thinking level; `subagents:disposed` signals that shutdown has stopped every agent. See [Events](#events). ([tintinweb/pi-subagents#377](https://github.com/tintinweb/pi-subagents/pull/377) — thanks [@erikdarlingdata](https://github.com/erikdarlingdata))
+- **Subagent usage events** — `subagents:usage` reports each assistant message's metadata for every agent (top-level, nested, and workflow children) for better integration with extensions; `subagents:disposed` signals that shutdown has stopped every agent. See [Events](#events). ([tintinweb/pi-subagents#377](https://github.com/tintinweb/pi-subagents/pull/377) — thanks [@erikdarlingdata](https://github.com/erikdarlingdata))
 
 ## Original Features
 
