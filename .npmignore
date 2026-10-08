@@ -32,3 +32,5 @@ vitest.config.ts
 .github/
 biome.json
 coverage/
+.idea/
+pi-chonky-subagents/
