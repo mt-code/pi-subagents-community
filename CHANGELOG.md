@@ -21,9 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **The workflow stand-down now recognises a lowercase `workflow` tool** ([#283](https://github.com/tintinweb/pi-subagents/issues/283) — thanks [@zampierilucas](https://github.com/zampierilucas)). The match is exact on purpose, and the set held `Workflow` and `SubagentWorkflow` only, so `@quintinshaw/pi-dynamic-workflows` — which registers lowercase `workflow` — never tripped it: with `workflowsEnabled` unset, both orchestrators reached the model and nothing warned. Adding the third name is the whole fix; exactness is kept, so a `list_workflows` still cannot take the feature down.
 - **Subagents inherit the parent session's thinking level** ([#306](https://github.com/tintinweb/pi-subagents/pull/306) — thanks [@luongnv89](https://github.com/luongnv89)). With no `thinking` from the caller or the agent file, a subagent ran at pi's `defaultThinkingLevel` (e.g. `max`) instead of the spawning session's level. Precedence is now explicit option, then agent config, then parent session.
-
-### Fixed
-- **`pi.extensions` now points at the compiled `./dist/index.js` instead of `./src/index.ts`**, removing the per-boot TypeScript transform (~0.6–1.1 s per session, [#252](https://github.com/tintinweb/pi-subagents/issues/252)). A `prepare` script builds `dist/` on git installs, falling back to `npx -p typescript` since pi installs those without devDependencies.
+- **The extension loads from the compiled `./dist/index.js` instead of `./src/index.ts`** ([#279](https://github.com/tintinweb/pi-subagents/pull/279) — thanks [@tobymao](https://github.com/tobymao)). pi no longer transpiles the TypeScript source on every boot, which saves about 0.45 s of extension load time on pi 1.0. A `prepare` script builds `dist/` on git installs, falling back to `npx typescript@^6` because pi installs those without devDependencies. The path-derived extension name changes from `[src]` to `[dist]`; refer to this extension as `[pi-subagents]` in `extensions:` lists.
 
 ## [0.19.0] - 2026-08-25
 

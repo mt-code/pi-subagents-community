@@ -36,7 +36,7 @@
   },
   "scripts": {
     "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc",
-    "prepare": "tsc --noCheck || npx -p typescript tsc --noCheck",
+    "prepare": "tsc --noCheck || npx --yes -p typescript@^6 tsc --noCheck",
     "prepublishOnly": "npm run lint && npm run typecheck && npm run test && npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
