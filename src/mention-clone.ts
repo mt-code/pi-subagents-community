@@ -163,7 +163,9 @@ export async function runMentionClone(opts: MentionCloneOptions): Promise<Mentio
     // createAgentSession would build itself.
     const systemPrompt = ctx.getSystemPrompt();
     const agentDir = getAgentDir();
-    const settingsManager = SettingsManager.create(ctx.cwd, agentDir);
+    // Same trust as the real session: pi's default would load an untrusted
+    // project's `.pi/` extensions into the clone.
+    const settingsManager = SettingsManager.create(ctx.cwd, agentDir, { projectTrusted: ctx.isProjectTrusted() });
     const resourceLoader = new DefaultResourceLoader({
       cwd: ctx.cwd,
       agentDir,

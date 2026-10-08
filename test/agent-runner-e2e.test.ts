@@ -99,7 +99,7 @@ describe("agent-runner end-to-end (real pi-mono session + real extension)", () =
       registerProvider: () => {},
       unregisterProvider: () => {},
     };
-    const ctx: any = { cwd, getSystemPrompt: () => "PARENT", model, modelRegistry };
+    const ctx: any = { cwd, getSystemPrompt: () => "PARENT", isProjectTrusted: () => true, model, modelRegistry };
 
     let active: string[] = [];
     try {

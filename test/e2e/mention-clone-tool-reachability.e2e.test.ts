@@ -84,6 +84,7 @@ describe("mention clone tool reachability against real pi-mono", () => {
       cwd,
       model,
       getSystemPrompt: () => "PARENT",
+      isProjectTrusted: () => true,
       // mention-clone reads the runtime off the registry facade's private
       // field, as agent-runner does (see isolated-provider.e2e.test.ts).
       modelRegistry: { ...backend.modelRegistry, runtime: backend.modelRuntime },
@@ -131,6 +132,7 @@ describe("mention clone tool reachability against real pi-mono", () => {
         cwd,
         model,
         getSystemPrompt: () => "LIVE_PROMPT_MARKER",
+        isProjectTrusted: () => true,
         modelRegistry: { ...backend.modelRegistry, runtime: backend.modelRuntime },
         sessionManager: main.sessionManager,
       };

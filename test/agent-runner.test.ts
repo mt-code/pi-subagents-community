@@ -33,6 +33,11 @@ const {
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({
   createAgentSession,
+  // Factories for pi's built-in extensions; each returns a tagged stub so the
+  // loader option can be asserted entry by entry.
+  createCodemodeExtension: () => "codemode-factory",
+  createToolSearchExtension: () => "tool-search-factory",
+  createMcpExtension: () => "mcp-factory",
   // Identity, as pi's own is: `defineTool` exists for the type inference, and
   // the structured-output tool is built through it.
   defineTool: (definition: unknown) => definition,
@@ -172,8 +177,11 @@ function createSession(finalText: string) {
     // extension registering after bind by mutating `loaderExtensionsRef`.
     getAllTools: vi.fn(() => {
       const opts = createAgentSession.mock.calls[0]?.[0];
-      return opts ? mockRegistry(opts).map((name) => ({ name })) : [];
+      return opts
+        ? mockRegistry(opts).map((name) => ({ name, exposure: mockToolDefinition(name)?.exposure ?? "direct" }))
+        : [];
     }),
+    getToolDefinition: vi.fn((name: string) => mockToolDefinition(name)),
     // pi's Agent; `beforeToolCall` is an optional, assignable hook the scope
     // installer wraps to block out-of-scope calls on turn 1.
     agent: { beforeToolCall: undefined } as {
@@ -189,6 +197,7 @@ function createSession(finalText: string) {
 const ctx = {
   cwd: "/tmp",
   model: undefined,
+  isProjectTrusted: vi.fn(() => true),
   modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },
   getSystemPrompt: vi.fn(() => "parent prompt"),
   sessionManager: {
@@ -254,7 +263,7 @@ describe("agent-runner final output capture", () => {
       cwd: "/tmp/worktree",
       agentDir: "/mock/agent-dir",
     }));
-    expect(settingsManagerCreate).toHaveBeenCalledWith("/tmp/worktree", "/mock/agent-dir");
+    expect(settingsManagerCreate).toHaveBeenCalledWith("/tmp/worktree", "/mock/agent-dir", { projectTrusted: true });
     // Same claim as before `rememberAgents` flipped the default — the effective
     // cwd reaches the session manager — now via the persistent constructor.
     expect(sessionManagerCreate).toHaveBeenCalledWith("/tmp/worktree", undefined, expect.anything());
@@ -262,6 +271,22 @@ describe("agent-runner final output capture", () => {
       cwd: "/tmp/worktree",
       agentDir: "/mock/agent-dir",
     }));
+  });
+
+  it("inherits an untrusted project from the parent, in both the loader and the session", async () => {
+    // pi's SettingsManager defaults to trusted; a child that took the default would
+    // load the project's `.pi/` extensions and `.pi/mcp.json` servers the user never
+    // trusted.
+    const { session } = createSession("UNTRUSTED");
+    createAgentSession.mockResolvedValue({ session });
+
+    await runAgent({ ...ctx, isProjectTrusted: () => false }, "Explore", "go", { pi });
+
+    expect(settingsManagerCreate).toHaveBeenCalledOnce();
+    expect(settingsManagerCreate).toHaveBeenCalledWith("/tmp", "/mock/agent-dir", { projectTrusted: false });
+    const settingsManager = settingsManagerCreate.mock.results[0].value;
+    expect(lastLoaderOpts().settingsManager).toBe(settingsManager);
+    expect(createAgentSession.mock.calls[0][0].settingsManager).toBe(settingsManager);
   });
 
   it("forwards worktreeBase to the prompt builder, and omits it otherwise", async () => {
@@ -804,6 +829,14 @@ function withExtensions(spec: Record<string, string[]>) {
  *     `excludeTools`, and it keeps growing as extensions register later.
  * Read live from `loaderExtensionsRef`, so a test can simulate late registration.
  */
+/** The definition an extension registered under `name`, as `registerLate` stores it. */
+function mockToolDefinition(name: string): { exposure?: string; defaultActive?: boolean } | undefined {
+  for (const ext of loaderExtensionsRef.current.extensions) {
+    if (ext.tools.has(name)) return ext.tools.get(name) as { exposure?: string; defaultActive?: boolean };
+  }
+  return undefined;
+}
+
 function mockRegistry(opts: Record<string, any>): string[] {
   const excluded = new Set<string>(opts.excludeTools ?? []);
   // pi registers customTools into the same registry, subject to the same gate.
@@ -1543,10 +1576,10 @@ describe("agent-runner master tool allowlist", () => {
 // into the live `extension.tools` map, which is what these tests simulate.
 describe("agent-runner async extension tool registration", () => {
   /** Simulate `pi.registerTool` on an already-loaded extension. */
-  function registerLate(extPath: string, toolName: string) {
+  function registerLate(extPath: string, toolName: string, definition: { exposure?: string; defaultActive?: boolean } = {}) {
     const ext = loaderExtensionsRef.current.extensions.find((e) => e.path === extPath);
     if (!ext) throw new Error(`no loaded extension at ${extPath}`);
-    ext.tools.set(toolName, {});
+    ext.tools.set(toolName, definition);
   }
 
   function setup(o: { builtinToolNames?: string[]; extSelectors?: string[] } = {}) {
@@ -1625,6 +1658,60 @@ describe("agent-runner async extension tool registration", () => {
     expect(session.getActiveToolNames()).not.toContain("drop_me");
   });
 
+  // pi registers some tools off on purpose: `codemode`/`tool_search` with
+  // `defaultActive: false`, MCP tools with `codemode` exposure. The scope must not
+  // force them on — that would declare every MCP tool to the child model.
+  it("leaves a tool pi registers inactive off, but still callable", async () => {
+    setup();
+    withExtensions({ "builtin:mcp": [], "builtin:codemode": [] });
+    const { session, listeners } = createSession("OK");
+    createAgentSession.mockResolvedValue({ session });
+    session.bindExtensions.mockImplementation(async () => {
+      registerLate("builtin:codemode", "codemode", { exposure: "model-only", defaultActive: false });
+      registerLate("builtin:mcp", "mcp__gh__search", { exposure: "codemode" });
+    });
+
+    await runAgent(ctx, "Explore", "go", { pi });
+    for (const l of listeners) l({ type: "turn_end" });
+
+    expect(session.getActiveToolNames()).not.toContain("codemode");
+    expect(session.getActiveToolNames()).not.toContain("mcp__gh__search");
+    // In scope all the same: codemode scripts call MCP tools through the gate.
+    await expect(
+      session.agent.beforeToolCall?.({ toolCall: { name: "mcp__gh__search" } }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("keeps a tool active once pi or an extension turned it on", async () => {
+    setup();
+    withExtensions({ "builtin:codemode": [] });
+    const { session, listeners } = createSession("OK");
+    createAgentSession.mockResolvedValue({ session });
+    session.bindExtensions.mockImplementation(async () => {
+      registerLate("builtin:codemode", "codemode", { exposure: "model-only", defaultActive: false });
+    });
+
+    await runAgent(ctx, "Explore", "go", { pi });
+    // The MCP extension activates codemode once a server needs it.
+    session.setActiveToolsByName([...session.getActiveToolNames(), "codemode"]);
+    for (const l of listeners) l({ type: "turn_end" });
+
+    expect(session.getActiveToolNames()).toContain("codemode");
+  });
+
+  it("activates an inactive-by-default tool the agent named with ext:", async () => {
+    setup({ extSelectors: ["ext:mcp/mcp__gh__search"] });
+    withExtensions({ "builtin:mcp": [] });
+    const { session, listeners } = createSession("OK");
+    createAgentSession.mockResolvedValue({ session });
+
+    await runAgent(ctx, "Explore", "go", { pi });
+    registerLate("builtin:mcp", "mcp__gh__search", { exposure: "codemode" });
+    for (const l of listeners) l({ type: "turn_end" });
+
+    expect(session.getActiveToolNames()).toContain("mcp__gh__search");
+  });
+
   it("beforeToolCall blocks an out-of-scope tool and delegates otherwise", async () => {
     // Turn 1 cannot be narrowed — before_agent_start fires inside prompt() and
     // may widen the set after the turn's tools are snapshotted — so a call-time
@@ -1698,6 +1785,26 @@ describe("agent-runner async extension tool registration", () => {
   });
 });
 
+// ─── pi's built-in extensions (codemode, tool-search, MCP) ─────────────
+// pi's CLI passes these to its loader as `extensionFactories`; a child loader
+// built without them never loads `builtin:codemode` or `builtin:mcp`.
+
+describe("pi built-in extensions in the child loader", () => {
+  it("hands the CLI's built-in entries to the child's resource loader", async () => {
+    vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: true }));
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ extensions: true }));
+    createAgentSession.mockResolvedValue({ session: createSession("OK").session });
+
+    await runAgent(ctx, "Explore", "go", { pi });
+
+    expect(lastLoaderOpts().extensionFactories).toEqual([
+      { name: "codemode", factory: "codemode-factory", replaceable: true, builtin: true },
+      { name: "tool-search", factory: "tool-search-factory", replaceable: true, builtin: true },
+      { name: "mcp", factory: "mcp-factory", replaceable: true, builtin: true },
+    ]);
+  });
+});
+
 // ─── extensions: string[] as a loader-level extension filter ────────────
 // An array entry is a bare name (filters default-discovered extensions),
 // a path (loads that extension fresh), or "*" (keep all defaults).
@@ -1718,6 +1825,10 @@ describe("extensionCanonicalName", () => {
     expect(extensionCanonicalName("/x/MCP.ts")).toBe("mcp");
     expect(extensionCanonicalName("/x/MyExt.js")).toBe("myext");
     expect(extensionCanonicalName("/x/Foo/index.ts")).toBe("foo");
+  });
+  it("maps pi's synthetic builtin:<name> paths to <name>, so exclude_extensions: [mcp] works", () => {
+    expect(extensionCanonicalName("builtin:codemode")).toBe("codemode");
+    expect(extensionCanonicalName("builtin:MCP")).toBe("mcp");
   });
 });
 

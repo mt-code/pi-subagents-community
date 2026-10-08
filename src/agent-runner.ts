@@ -6,11 +6,14 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
-import type { ExtensionContext, LoadExtensionsResult, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, InlineExtension, LoadExtensionsResult, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
   type AgentSession,
   type AgentSessionEvent,
   createAgentSession,
+  createCodemodeExtension,
+  createMcpExtension,
+  createToolSearchExtension,
   DefaultResourceLoader,
   type ExtensionAPI,
   getAgentDir,
@@ -48,6 +51,22 @@ export const SUBAGENT_TOOL_NAMES = {
 const EXCLUDED_TOOL_NAMES: string[] = Object.values(SUBAGENT_TOOL_NAMES);
 
 /**
+ * pi's built-in codemode, tool-search and MCP extensions, as its CLI hands them to
+ * the resource loader. They only exist when passed in as `extensionFactories` — an
+ * SDK-built loader gets none of them — so without this a subagent has no `codemode`
+ * and no MCP servers. Entries mirror the CLI's (`builtin: true` loads them as
+ * `builtin:<name>`, honouring `-builtin:<name>` and `noExtensions`; `replaceable`
+ * lets a third-party MCP extension take over). The CLI's llama.cpp entry is not
+ * exported, so it is left out. Shared across spawns like the CLI's list: each
+ * factory keeps its state per `(pi) => …` call, not per factory.
+ */
+const PI_BUILTIN_EXTENSIONS: InlineExtension[] = [
+  { name: "codemode", factory: createCodemodeExtension(), replaceable: true, builtin: true },
+  { name: "tool-search", factory: createToolSearchExtension(), replaceable: true, builtin: true },
+  { name: "mcp", factory: createMcpExtension(), replaceable: true, builtin: true },
+];
+
+/**
  * Canonical name of an extension for `extensions: [...]` allowlist matching.
  * Lowercased — extension names match case-insensitively so `extensions: [Mcp]`
  * resolves the same as `[mcp]`. Tool names within `ext:foo/bar` are not affected.
@@ -55,6 +74,8 @@ const EXCLUDED_TOOL_NAMES: string[] = Object.values(SUBAGENT_TOOL_NAMES);
  * single-file extensions to the basename minus `.ts`/`.js`.
  */
 export function extensionCanonicalName(extPath: string): string {
+  // pi's built-ins are synthetic paths (`builtin:codemode`), not files.
+  if (extPath.startsWith("builtin:")) return extPath.slice("builtin:".length).toLowerCase();
   const base = basename(extPath);
   const name = base === "index.ts" || base === "index.js"
     ? basename(dirname(extPath))
@@ -277,10 +298,30 @@ export function installExtensionToolScope(
     return keep;
   };
 
+  // Tools the agent named itself: activated whenever in scope, as `--tools`
+  // activates a tool pi would otherwise leave off.
+  const named = new Set([...toolNames, ...readmitToolNames, ...[...narrowing.values()].flatMap((s) => [...s])]);
+
+  // The scope is a ceiling, not a loadout. Inside it, a tool is activated only
+  // when the agent named it, when it is already active, or when pi itself would
+  // activate it on registration (`direct`/`model-only` without `defaultActive:
+  // false`). Anything else pi registers off on purpose — `codemode` and
+  // `tool_search` until the MCP extension turns them on, `codemode`-exposed MCP
+  // tools that only scripts call — and forcing them on would declare every MCP
+  // tool to the model. `beforeToolCall` below still gates on the full scope, so
+  // codemode's nested calls reach them.
   const renarrow = () => {
     const allowed = inScope();
-    const next = session.getAllTools().map((t) => t.name).filter((n) => allowed.has(n));
     const current = session.getActiveToolNames();
+    const active = new Set(current);
+    const next = session.getAllTools()
+      .filter((t) => allowed.has(t.name) && (
+        named.has(t.name)
+        || active.has(t.name)
+        || ((t.exposure === "direct" || t.exposure === "model-only")
+          && session.getToolDefinition(t.name)?.defaultActive !== false)
+      ))
+      .map((t) => t.name);
     // setActiveToolsByName unconditionally rebuilds the system prompt, so skip
     // the no-op that steady-state turns would otherwise pay for every turn.
     if (next.length !== current.length || next.some((n, i) => n !== current[i])) {
@@ -746,12 +787,20 @@ export async function runAgent(
           };
         };
 
+  // The child inherits the parent session's project-trust decision. pi's
+  // `SettingsManager.create` defaults to trusted, so without this a subagent in a
+  // project the user never trusted would load its `.pi/` extensions, packages and
+  // skills, and start the servers its `.pi/mcp.json` lists. One manager serves the
+  // loader and the session, so both see the same trust state.
+  const settingsManager = SettingsManager.create(configCwd, agentDir, { projectTrusted: ctx.isProjectTrusted() });
   const loader = new DefaultResourceLoader({
     cwd: configCwd,
     agentDir,
+    settingsManager,
     noExtensions,
     additionalExtensionPaths,
     extensionsOverride,
+    extensionFactories: PI_BUILTIN_EXTENSIONS,
     noSkills,
     noPromptTemplates: true,
     noThemes: true,
@@ -956,7 +1005,6 @@ export async function runAgent(
     sessionExcludeTools = [...denyTools];
   }
 
-  const settingsManager = SettingsManager.create(configCwd, agentDir);
   const configuredSessionDir = resolveConfiguredSessionDir(agentConfig?.sessionDir, effectiveCwd);
   const defaultSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR ?? settingsManager.getSessionDir?.();
   // Frontmatter wins when it says anything; otherwise the project default,

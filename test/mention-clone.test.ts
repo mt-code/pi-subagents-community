@@ -40,6 +40,7 @@ vi.mock("@earendil-works/pi-coding-agent", async () => {
   };
 });
 
+import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { agentMentionReminder } from "../src/mention.js";
 import { runMentionClone } from "../src/mention-clone.js";
 
@@ -84,6 +85,7 @@ function mainCtx(overrides: Record<string, unknown> = {}) {
     thinkingLevel: "high",
     modelRegistry: { runtime: { kind: "runtime" } },
     getSystemPrompt: vi.fn(() => "the live system prompt"),
+    isProjectTrusted: vi.fn(() => true),
     sessionManager: {
       getEntries: vi.fn(() => ENTRIES),
       getLeafId: vi.fn(() => "leaf-1"),
@@ -188,6 +190,14 @@ describe("cloning the conversation", () => {
     await runMentionClone(opts());
 
     expect(createAgentSession.mock.calls[0][0].thinkingLevel).toBe("high");
+  });
+
+  it("keeps an untrusted project untrusted in the clone", async () => {
+    cloneSession(callsAgent());
+
+    await runMentionClone(opts({ ctx: mainCtx({ isProjectTrusted: vi.fn(() => false) }) }));
+
+    expect(vi.mocked(SettingsManager.create)).toHaveBeenLastCalledWith("/repo", expect.any(String), { projectTrusted: false });
   });
 
   it("omits the level when the context carries none", async () => {
