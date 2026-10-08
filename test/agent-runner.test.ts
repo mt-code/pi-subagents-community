@@ -2463,9 +2463,6 @@ describe("agent-runner ext: tool selectors", () => {
   });
 });
 
-// The limit a run will enforce, resolved before the run starts. The widget's
-// turn counter has to predict it for agents spawned outside the Agent tool
-// (mentions, cross-extension RPC), and a second copy of the expression there
 // Subagent thinking levels inherit the spawning session's level unless the
 // caller or the agent file pins one — otherwise an unset level falls through
 // to pi's defaultThinkingLevel (e.g. "max") instead of matching the parent.
@@ -2518,6 +2515,9 @@ describe("agent-runner thinking level inheritance", () => {
   });
 });
 
+// The limit a run will enforce, resolved before the run starts. The widget's
+// turn counter has to predict it for agents spawned outside the Agent tool
+// (mentions, cross-extension RPC), and a second copy of the expression there
 // would drift from the one runAgent enforces — so both call this.
 describe("resolveEffectiveMaxTurns", () => {
   let prevDefault: number | undefined;
