@@ -74,6 +74,8 @@ const PI_BUILTIN_EXTENSIONS: InlineExtension[] = [
  * single-file extensions to the basename minus `.ts`/`.js`.
  */
 export function extensionCanonicalName(extPath: string): string {
+  // pi's built-ins are synthetic paths (`builtin:codemode`), not files.
+  if (extPath.startsWith("builtin:")) return extPath.slice("builtin:".length).toLowerCase();
   const base = basename(extPath);
   const name = base === "index.ts" || base === "index.js"
     ? basename(dirname(extPath))

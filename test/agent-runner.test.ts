@@ -1744,6 +1744,10 @@ describe("extensionCanonicalName", () => {
     expect(extensionCanonicalName("/x/MyExt.js")).toBe("myext");
     expect(extensionCanonicalName("/x/Foo/index.ts")).toBe("foo");
   });
+  it("maps pi's synthetic builtin:<name> paths to <name>, so exclude_extensions: [mcp] works", () => {
+    expect(extensionCanonicalName("builtin:codemode")).toBe("codemode");
+    expect(extensionCanonicalName("builtin:MCP")).toBe("mcp");
+  });
 });
 
 describe("extensionCanonicalNames (#143 — package short name alias)", () => {
