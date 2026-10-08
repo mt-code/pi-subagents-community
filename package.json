@@ -63,7 +63,6 @@
     "extensions": [
       "./dist/index.js"
     ],
-    "video": "https://github.com/tintinweb/pi-subagents/raw/master/media/demo.mp4",
-    "image": "https://github.com/tintinweb/pi-subagents/raw/master/media/screenshot.png"
+    "image": "https://github.com/mt-code/pi-subagents-community/raw/master/media/subagents-fleetview.gif"
   }
 }
