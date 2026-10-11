@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The conversation viewer always shows a bash command in full.** A multi-line command was cut to its first line until tool output was expanded, so reading what an agent ran meant expanding every result too. Bash commands and the file tools' paths now always show whole and wrapped; only the output collapses. Other tools' JSON arguments still collapse to one line, since they can carry an entire prompt.
+
 ### Fixed
 - **Agent `.output` transcripts no longer repeat the prompt or record pi's system messages** (from [#384](https://github.com/tintinweb/pi-subagents/pull/384)). pi 1.x puts a `system` message ahead of the first user message and adds one whenever the tool set changes, so the spawn prompt was written twice and each system message landed as a `toolResult` entry. The stream now starts after the first user message and skips system messages.
 - **The FleetView list no longer sits flush against pi's footer** ([#351](https://github.com/tintinweb/pi-subagents/issues/351) — thanks [@KKinsz](https://github.com/KKinsz)). pi places below-editor widgets directly on its status bar, so the last agent row ran into the model/context line. The list now ends with a blank line.

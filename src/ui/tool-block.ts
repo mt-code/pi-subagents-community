@@ -6,8 +6,8 @@
  * the viewer owns the state (live output, expand toggle, Markdown cache) and
  * passes in what these need.
  *
- * Lines come back unclamped: the viewer clamps every content line to width
- * once, at the end of `buildContentLines`. Clamping here as well would double
+ * Lines come back unclamped: the viewer clamps each message's lines to width
+ * once, as it builds them in `messageLines`. Clamping here as well would double
  * the cost of a header or prompt line, and those carry `·`/`…`, which sends
  * pi-tui's `truncateToWidth` down its slow grapheme path (~9 µs a line).
  */
@@ -30,26 +30,23 @@ export function previewsTail(toolName: string): boolean {
   return toolName === "bash";
 }
 
+/** Tools whose arguments always shown in full. */
+const SUMMARIZED_TOOLS = new Set(["bash", "read", "write", "edit", "grep", "find", "ls"]);
+
 /**
  * The summary of a call's arguments shown under its header: the command for
  * bash, the path or pattern for the file tools, compact JSON for anything else.
  */
 export function formatToolArgs(toolName: string, args: Record<string, unknown> | undefined): string {
   if (!args) return "";
-  const str = (key: string) => typeof args[key] === "string" ? args[key] as string : undefined;
-  switch (toolName) {
-    case "bash": return str("command") ?? "";
-    case "read":
-    case "write":
-    case "edit": return str("path") ?? "";
-    case "grep":
-    case "find":
-    case "ls": return [str("pattern"), str("path")].filter(Boolean).join("  ");
-    default: {
-      const json = JSON.stringify(args);
-      return json === "{}" ? "" : json;
-    }
+  if (!SUMMARIZED_TOOLS.has(toolName)) {
+    const json = JSON.stringify(args);
+    return json === "{}" ? "" : json;
   }
+  const str = (key: string) => typeof args[key] === "string" ? args[key] as string : undefined;
+  if (toolName === "bash") return str("command") ?? "";
+  if (toolName === "grep" || toolName === "find" || toolName === "ls") return [str("pattern"), str("path")].filter(Boolean).join("  ");
+  return str("path") ?? "";
 }
 
 /**
@@ -66,8 +63,9 @@ export function toolHeader(toolName: string, args: Record<string, unknown> | und
 
 /**
  * The call half of a tool block: header, then arguments in the header's color,
- * aligned with the output. Collapsed, a multi-line argument shows its first
- * line and ` …`; expanded, all of it, wrapped.
+ * aligned with the output. A summary (a bash command, a path) is always shown
+ * whole, wrapped — only the output collapses. The JSON fallback can be an
+ * entire prompt, so collapsed it shows its first line and ` …`.
  */
 export function renderToolCall(
   call: { name: string; args: Record<string, unknown> | undefined; timing: ToolTiming | undefined; isError: boolean },
@@ -79,7 +77,7 @@ export function renderToolCall(
   const lines = [th.fg(color, `${TOOL_HEADER_INDENT}${toolHeader(call.name, call.args, call.timing)}`)];
   const argText = formatToolArgs(call.name, call.args).trim();
   if (argText) {
-    const argLines = expanded
+    const argLines = expanded || SUMMARIZED_TOOLS.has(call.name)
       ? wrapTextWithAnsi(argText, Math.max(1, width - TOOL_INDENT.length))
       : [argText.split("\n")[0] + (argText.includes("\n") ? " …" : "")];
     for (const line of argLines) lines.push(th.fg(color, TOOL_INDENT + line));

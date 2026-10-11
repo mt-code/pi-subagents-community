@@ -800,14 +800,29 @@ describe("ConversationViewer", () => {
         .toContain("    l10");
     });
 
-    it("shows only the first line of multi-line arguments until expanded", () => {
-      const messages = [call("c1", "bash", { command: "echo a\necho b" })];
+    it("shows a multi-line bash command in full while its output stays collapsed", () => {
+      const out = content(viewerFor([call("c1", "bash", { command: "echo a\necho b" }), res("c1", "bash", lines(10))]));
+      const at = out.indexOf("  [Tool Bash · no timeout]");
 
-      expect(content(viewerFor(messages))).toContain("    echo a …");
-      expect(content(viewerFor(messages))).toContain("  [Tool Bash · no timeout]");
-      const expanded = content(viewerFor(messages, { expanded: true }));
-      expect(expanded).toContain("    echo a");
-      expect(expanded).toContain("    echo b");
+      expect(out.slice(at + 1, at + 3)).toEqual(["    echo a", "    echo b"]);
+      expect(out.join("\n")).not.toContain("…\n");
+      expect(out).toContain("    … 7 earlier lines hidden · ctrl+o to expand");
+    });
+
+    it("wraps a bash command wider than the viewer instead of cutting it", () => {
+      const command = `echo ${"word ".repeat(30)}end`;
+      const out = content(viewerFor([call("c1", "bash", { command })]));
+
+      expect(out.join("\n")).toContain("end");
+      expect(out.filter(l => l.endsWith("..."))).toEqual([]);
+    });
+
+    it("keeps another tool's JSON arguments to one line until expanded", () => {
+      const messages = [call("c1", "mcp_search", { query: "word ".repeat(40).trim(), limit: 5 })];
+      const argLines = (out: string[]) => out.filter(l => l.startsWith("    ") && !l.includes("[Tool"));
+
+      expect(argLines(content(viewerFor(messages)))).toHaveLength(1);
+      expect(argLines(content(viewerFor(messages, { expanded: true }))).length).toBeGreaterThan(1);
     });
 
     it("streams live output from tool_execution_update until the tool ends", () => {
