@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The conversation viewer always shows a bash command in full.** A multi-line command was cut to its first line until tool output was expanded, so reading what an agent ran meant expanding every result too. Bash commands and the file tools' paths now always show whole and wrapped; only the output collapses. Other tools' JSON arguments still collapse to one line, since they can carry an entire prompt.
+- **Tool calls in the conversation viewer have a blank line above them.** A `[Tool …]` header sat directly under the assistant's thinking or text, and under the previous call, so calls were hard to pick out. Each call now gets a blank line, except one that directly follows the `[Assistant]` label.
+
 ### Fixed
 - **Agent `.output` transcripts no longer repeat the prompt or record pi's system messages** (from [#384](https://github.com/tintinweb/pi-subagents/pull/384)). pi 1.x puts a `system` message ahead of the first user message and adds one whenever the tool set changes, so the spawn prompt was written twice and each system message landed as a `toolResult` entry. The stream now starts after the first user message and skips system messages.
 - **The FleetView list no longer sits flush against pi's footer** ([#351](https://github.com/tintinweb/pi-subagents/issues/351) — thanks [@KKinsz](https://github.com/KKinsz)). pi places below-editor widgets directly on its status bar, so the last agent row ran into the model/context line. The list now ends with a blank line.
@@ -14,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`SubagentWorkflow` honours an agent file's `isolated: true`** ([#339](https://github.com/tintinweb/pi-subagents/pull/339) — thanks [@ajaynomics](https://github.com/ajaynomics)). The workflow host never forwarded the flag, so script-spawned children of a hermetic agent loaded every host extension and its MCP and web tools.
 - **An agent file's `isolated:` now holds on every spawn path.** Direct-mode and fallback `@handle` mentions, reclaimed agents, and RPC spawns that omitted `isolated` ran an `isolated: true` agent with every host extension loaded. The file now wins everywhere; an RPC caller's `isolated: false` no longer overrides a file's `true`.
 - **An agent file's `isolation:` now holds on mention and RPC spawns.** Those paths ran an `isolation: worktree` agent in the main checkout, and an RPC caller's `"worktree"` overrode a file's `isolation: off`. The file now wins there, and the widget's `worktree` tag shows for every worktree agent. Workflow `agent()` calls are unchanged: as in Claude Code, only the script's option decides. An agent whose file says `worktree` now fails to start outside a git repo instead of running in place.
+- **The conversation viewer no longer freezes the TUI while a tool streams output.** Every session event rebuilt the whole transcript, re-wrapping each earlier tool result, and pi's bash tool sends an update every 100 ms. On a long transcript one rebuild took longer than that, so keys waited seconds behind them. Finished messages now keep their rendered lines, so an update rebuilds only the running call (239 ms to 1.6 ms per update at 5000 messages).
 
 ## [0.20.1] - 2026-10-09
 

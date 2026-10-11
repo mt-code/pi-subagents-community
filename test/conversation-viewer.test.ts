@@ -800,14 +800,45 @@ describe("ConversationViewer", () => {
         .toContain("    l10");
     });
 
-    it("shows only the first line of multi-line arguments until expanded", () => {
-      const messages = [call("c1", "bash", { command: "echo a\necho b" })];
+    it("shows a multi-line bash command in full while its output stays collapsed", () => {
+      const out = content(viewerFor([call("c1", "bash", { command: "echo a\necho b" }), res("c1", "bash", lines(10))]));
+      const at = out.indexOf("  [Tool Bash · no timeout]");
 
-      expect(content(viewerFor(messages))).toContain("    echo a …");
-      expect(content(viewerFor(messages))).toContain("  [Tool Bash · no timeout]");
-      const expanded = content(viewerFor(messages, { expanded: true }));
-      expect(expanded).toContain("    echo a");
-      expect(expanded).toContain("    echo b");
+      expect(out.slice(at + 1, at + 3)).toEqual(["    echo a", "    echo b"]);
+      expect(out.join("\n")).not.toContain("…\n");
+      expect(out).toContain("    … 7 earlier lines hidden · ctrl+o to expand");
+    });
+
+    it("sets each call apart from the text and calls above it, but not from the role label", () => {
+      const out = content(viewerFor([{
+        role: "assistant",
+        content: [
+          { type: "text", text: "Checking." },
+          { type: "toolCall", id: "c1", name: "read", arguments: { path: "a" } },
+          { type: "toolCall", id: "c2", name: "read", arguments: { path: "b" } },
+        ],
+      }, call("c3", "read", { path: "c" })]));
+
+      expect(out.slice(0, 8).map(l => l.trimEnd())).toEqual([
+        "[Assistant]", "Checking.", "", "  [Tool Read]", "    a", "", "  [Tool Read]", "    b",
+      ]);
+      expect(out.slice(-3)).toEqual(["[Assistant]", "  [Tool Read]", "    c"]);
+    });
+
+    it("wraps a bash command wider than the viewer instead of cutting it", () => {
+      const command = `echo ${"word ".repeat(30)}end`;
+      const out = content(viewerFor([call("c1", "bash", { command })]));
+
+      expect(out.join("\n")).toContain("end");
+      expect(out.filter(l => l.endsWith("..."))).toEqual([]);
+    });
+
+    it("keeps another tool's JSON arguments to one line until expanded", () => {
+      const messages = [call("c1", "mcp_search", { query: "word ".repeat(40).trim(), limit: 5 })];
+      const argLines = (out: string[]) => out.filter(l => l.startsWith("    ") && !l.includes("[Tool"));
+
+      expect(argLines(content(viewerFor(messages)))).toHaveLength(1);
+      expect(argLines(content(viewerFor(messages, { expanded: true }))).length).toBeGreaterThan(1);
     });
 
     it("streams live output from tool_execution_update until the tool ends", () => {
@@ -833,6 +864,61 @@ describe("ConversationViewer", () => {
       expect(out.filter(l => l.includes("matched output"))).toHaveLength(1);
       expect(out.filter(l => l === "[Result]")).toHaveLength(1);
       expect(out).toContain("orphan output");
+    });
+
+    it("rebuilds only the running call's block on a session event", () => {
+      const session = mockSession([
+        call("c1", "read", { path: "a" }), res("c1", "read", "done"),
+        call("c2", "bash", { command: "make" }),
+      ]);
+      const viewer = viewerFor([], { session });
+      content(viewer);
+      const built = vi.spyOn(viewer as any, "messageLines");
+
+      session.emit({ type: "tool_execution_update", toolCallId: "c2", toolName: "bash", args: {}, partialResult: { content: [{ type: "text", text: "building..." }] } });
+      expect(content(viewer)).toContain("    building...");
+
+      expect(built).toHaveBeenCalledTimes(1);
+      expect(built.mock.calls[0][0]).toBe(session.messages[2]);
+    });
+
+    it("shows a result that lands after its call was rendered", () => {
+      const messages: any[] = [call("c1", "bash", { command: "make" })];
+      const session = mockSession(messages);
+      const viewer = viewerFor([], { session });
+      expect(content(viewer).join("\n")).not.toContain("compiled");
+
+      messages.push(res("c1", "bash", "compiled", true));
+      session.emit();
+      const raw = (viewer as any).buildContentLines(76) as string[];
+
+      expect(raw.map(untag)).toContain("    compiled");
+      expect(raw.find(l => l.includes("[Tool Bash"))).toContain("<error>");
+    });
+
+    it("re-renders a finished message that pi replaced in place", () => {
+      const messages: any[] = [call("c1", "read", { path: "a" }), res("c1", "read", "before")];
+      const session = mockSession(messages);
+      const viewer = viewerFor([], { session });
+      expect(content(viewer)).toContain("    before");
+
+      // What AgentSession._replaceMessageInPlace does on a `message_end` replacement.
+      const target = messages[1];
+      for (const key of Object.keys(target)) delete target[key];
+      Object.assign(target, res("c1", "read", "after"));
+      session.emit();
+
+      expect(content(viewer)).toContain("    after");
+      expect(content(viewer)).not.toContain("    before");
+    });
+
+    it("re-renders a finished message at a new width", () => {
+      const viewer = viewerFor([call("c1", "read", { path: "f" }), res("c1", "read", "word ".repeat(30).trim())]);
+      const wide = (viewer as any).buildContentLines(76) as string[];
+      const narrow = (viewer as any).buildContentLines(30) as string[];
+
+      assertAllLinesFit(narrow, 30);
+      expect(narrow.length).toBeGreaterThan(wide.length);
     });
 
     it("re-renders every second while a tool runs, and stops once disposed", () => {

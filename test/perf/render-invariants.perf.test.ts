@@ -45,7 +45,7 @@ vi.mock("@earendil-works/pi-tui", async (importOriginal) => {
 // After the mock, so the subjects bind the counting versions.
 const { AgentWidget } = await import("../../src/ui/agent-widget.js");
 const { ConversationViewer } = await import("../../src/ui/conversation-viewer.js");
-const { makeActivity, makeFleet, makeSession, makeStreamingSession, mountViewer, perfTheme, perfTui } = await import(
+const { makeActivity, makeFleet, makeRecord, makeSession, makeStreamingSession, makeToolStreamingSession, mountViewer, NOW, perfTheme, perfTui } = await import(
   "../helpers/perf-fixtures.js"
 );
 
@@ -71,24 +71,34 @@ describe("ConversationViewer — cost stays linear in transcript length", () => 
     return counts.wrap + counts.markdownRender;
   }
 
-  // The viewer rebuilds every line of the transcript on every frame, so the work
-  // is expected to grow with it. What must not happen is growing FASTER than it:
-  // ten times the messages, at most ~ten times the work. A quadratic here is
-  // invisible on a short conversation and locks the TUI on a long one.
-  it("does ~10x the work for 10x the messages (raw wrap path)", () => {
-    const small = wrapsFor(30, "off");
-    const large = wrapsFor(300, "off");
-
-    expect(small).toBeGreaterThan(0);
-    expect(large / small).toBeLessThanOrEqual(11);
+  // A session event drops the transcript, but finished messages keep their
+  // rendered lines: only what can still change is rebuilt. Without that, every
+  // event re-wraps the whole history, and a bash call streaming an update every
+  // 100 ms over a long transcript outpaces the render and stalls the TUI.
+  it("an event re-renders no finished message (raw wrap path)", () => {
+    expect(wrapsFor(300, "off")).toBe(0);
   });
 
-  it("does ~10x the work for 10x the messages (markdown path)", () => {
-    const small = wrapsFor(30, "assistant");
-    const large = wrapsFor(300, "assistant");
+  it("an event re-renders no finished message (markdown path)", () => {
+    expect(wrapsFor(300, "assistant")).toBe(0);
+  });
 
+  it("a streamed tool update re-wraps the running call, whatever the transcript's length", () => {
+    const wrapsPerUpdate = (n: number): number => {
+      const session = makeToolStreamingSession(n);
+      const record = makeRecord(0, { toolTimings: new Map([["live", { startedAt: NOW }]]) });
+      const viewer = mountViewer(ConversationViewer, session, record, () => "assistant");
+      viewer.render(120);
+      session.update(0);
+      counts.wrap = 0;
+      counts.markdownRender = 0;
+      viewer.render(120);
+      return counts.wrap + counts.markdownRender;
+    };
+
+    const small = wrapsPerUpdate(30);
     expect(small).toBeGreaterThan(0);
-    expect(large / small).toBeLessThanOrEqual(11);
+    expect(wrapsPerUpdate(300)).toBeLessThanOrEqual(small);
   });
 
   it("does ~10x the work for 10x the messages while a thinking block streams", () => {

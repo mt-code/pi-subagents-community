@@ -29,6 +29,8 @@ const TOOL_RENDER_MS = 1000;
 /** One column per character, no escapes: a line this matches is as wide as it is long. */
 const PRINTABLE_ASCII = /^[\x20-\x7e]*$/;
 
+type ToolResultMessage = Extract<AgentSession["messages"][number], { role: "toolResult" }>;
+
 /** What a click on a recorded span does: send a key, jump to the end, or place the composer cursor. */
 type HitAction = { key: string } | { latest: true } | { composer: true };
 interface HitTarget { row: number; start: number; end: number; action: HitAction }
@@ -157,6 +159,36 @@ function humanCount(n: number): string {
   return `${value.toFixed(1).replace(/\.0$/, "")}${thousands ? "k" : "M"}`;
 }
 
+/**
+ * Clamp only what overflows. `truncateToWidth` returns a fitting line
+ * unchanged, but reaching that answer takes its slow grapheme path on any line
+ * with an escape or non-ASCII character — every themed line. Plain short lines
+ * are settled by the regex; the rest by `visibleWidth`, which is cached.
+ */
+function clampLine(line: string, width: number): string {
+  return (line.length <= width && PRINTABLE_ASCII.test(line)) || visibleWidth(line) <= width ? line : truncateToWidth(line, width);
+}
+
+/**
+ * What a message's rendered lines are built from, compared by reference to
+ * tell a cached block from a changed one. Strings are immutable, so any edit to
+ * a message — pi's `message_end` replacement rewrites the object in place —
+ * shows up here as a different value, at the cost of one pointer compare each.
+ */
+function contentParts(msg: AgentSession["messages"][number] | undefined): unknown[] {
+  if (!msg) return [];
+  const m = msg as any;
+  if (m.role === "bashExecution") return [m.command, m.output];
+  if (!Array.isArray(m.content)) return [m.content];
+  const parts: unknown[] = m.role === "toolResult" ? [m.isError] : [];
+  for (const c of m.content) parts.push(c.text ?? c.thinking ?? c.arguments ?? c.data ?? c);
+  return parts;
+}
+
+function sameParts(a: unknown[], b: unknown[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
 function truncationNote(elided: number, fromEnd = false): string {
   return `... (truncated, ${humanCount(elided)} ${fromEnd ? "earlier" : "more"} character${elided === 1 ? "" : "s"})`;
 }
@@ -211,6 +243,15 @@ export class ConversationViewer implements Component, Focusable {
    * whole transcript — 12.5 times a second, ~100 ms each at 5000 messages.
    */
   private transcript: { width: number; mode: ViewerMarkdownMode; expanded: boolean; lines: string[]; builtAt: number } | undefined;
+  /**
+   * Each finished message's rendered lines, so dropping `transcript` rebuilds
+   * only what can still change. Without it every streamed tool update — pi's
+   * bash sends one per 100 ms — re-wrapped every tool result in the history,
+   * which on a long transcript cost more than the 100 ms between updates and
+   * left the whole TUI waiting behind it. Keyed by width, mode and expansion;
+   * a theme change replaces the map.
+   */
+  private blockCache = new WeakMap<object, { key: string; parts: unknown[]; lines: string[] }>();
 
   constructor(
     private tui: TUI,
@@ -722,6 +763,7 @@ export class ConversationViewer implements Component, Focusable {
 
   invalidate(): void {
     this.transcript = undefined;
+    this.blockCache = new WeakMap();
   }
 
   /** Run the ticker at the rate the screen needs: spinner, tool runtime, or not at all. */
@@ -838,81 +880,112 @@ export class ConversationViewer implements Component, Focusable {
     }
 
     // Results rendered inside their call's block, so the loop below skips them.
-    const results = new Map<string, Extract<AgentSession["messages"][number], { role: "toolResult" }>>();
+    const results = new Map<string, ToolResultMessage>();
     for (const msg of messages) {
       if (msg.role === "toolResult") results.set(msg.toolCallId, msg);
     }
     const calledIds = new Set<string>();
+    const cacheKey = `${width}|${mode}|${this.toolsExpanded}`;
     let needsSeparator = false;
     for (const msg of messages) {
-      if (msg.role === "user") {
-        const text = typeof msg.content === "string"
-          ? msg.content
-          : extractText(msg.content);
-        if (!text.trim()) continue;
-        if (needsSeparator) lines.push(th.fg("dim", "───"));
-        lines.push(th.fg("accent", "[User]"));
-        for (const line of wrapTextWithAnsi(text.trim(), width)) {
-          lines.push(line);
-        }
-      } else if (msg.role === "assistant") {
-        const textParts: string[] = [];
-        const thinking: Extract<(typeof msg.content)[number], { type: "thinking" }>[] = [];
-        const toolCalls: Extract<(typeof msg.content)[number], { type: "toolCall" }>[] = [];
-        for (const c of msg.content) {
-          if (c.type === "text" && c.text) textParts.push(c.text);
-          else if (c.type === "thinking" && !this.hideThinking && !c.redacted && c.thinking.trim()) thinking.push(c);
-          else if (c.type === "toolCall") toolCalls.push(c);
-        }
-        if (needsSeparator) lines.push(th.fg("dim", "───"));
-        lines.push(th.bold("[Assistant]"));
-        // Styled as pi's own transcript styles it: italic, in `thinkingText`.
-        const thinkingStyle: DefaultTextStyle = { color: t => th.fg("thinkingText", t), italic: true };
-        for (const block of thinking) {
-          const text = block.thinking.trim();
-          lines.push(...(mode === "off"
-            ? this.rawLines(text, width, thinkingStyle)
-            : this.markdownLines(block, text, width, thinkingStyle)));
-        }
-        if (thinking.length > 0 && textParts.length > 0) lines.push("");
-        if (textParts.length > 0) {
-          const text = textParts.join("\n").trim();
-          lines.push(...(mode === "off"
-            ? this.rawLines(text, width)
-            : this.markdownLines(msg, text, width)));
-        }
-        for (const call of toolCalls) {
-          calledIds.add(call.id);
-          lines.push(...this.toolBlockLines(call.id, call.name, call.arguments, results.get(call.id), width));
-        }
-      } else if (msg.role === "toolResult") {
-        if (calledIds.has(msg.toolCallId)) continue;
-        // Orphaned from its call (e.g. compacted away): the result alone.
-        const output = this.toolOutputLines(msg, extractText(msg.content).trim(), previewsTail(msg.toolName), width, "");
-        if (output.length === 0) continue;
-        if (needsSeparator) lines.push(th.fg("dim", "───"));
-        lines.push(th.fg("dim", "[Result]"));
-        lines.push(...output);
-      } else if ((msg as any).role === "bashExecution") {
-        const bash = msg as any;
-        if (needsSeparator) lines.push(th.fg("dim", "───"));
-        lines.push(truncateToWidth(th.fg("muted", `  $ ${bash.command}`), width));
-        // Never Markdown: command output is the one thing here that is
-        // definitionally not authored as Markdown.
-        lines.push(...this.toolOutputLines(undefined, bash.output?.trim() ?? "", true, width, ""));
-      } else {
+      if (msg.role === "assistant") {
+        for (const c of msg.content) if (c.type === "toolCall") calledIds.add(c.id);
+      } else if (msg.role === "toolResult" && calledIds.has(msg.toolCallId)) {
         continue;
       }
+      // A block is final once nothing it shows can change: not streaming, and
+      // every tool call it holds has its result (so its header's runtime has
+      // stopped). Only those are cached — the live partial and the ticking
+      // header are rebuilt each time, everything above them is reused.
+      const final = msg !== streaming
+        && (msg.role !== "assistant" || msg.content.every(c => c.type !== "toolCall" || results.has(c.id)));
+      let block: string[] | undefined;
+      if (final) {
+        // An assistant block renders its results too, so they are part of what it is built from.
+        const parts = msg.role === "assistant"
+          ? [...contentParts(msg), ...msg.content.flatMap(c => c.type === "toolCall" ? contentParts(results.get(c.id)) : [])]
+          : contentParts(msg);
+        const cached = this.blockCache.get(msg);
+        if (cached?.key === cacheKey && sameParts(cached.parts, parts)) {
+          block = cached.lines;
+        } else {
+          block = this.messageLines(msg, results, width, mode);
+          this.blockCache.set(msg, { key: cacheKey, parts, lines: block });
+        }
+      } else {
+        block = this.messageLines(msg, results, width, mode);
+      }
+      if (block.length === 0) continue;
+      if (needsSeparator) lines.push(clampLine(th.fg("dim", "───"), width));
+      lines.push(...block);
       needsSeparator = true;
     }
+    return lines;
+  }
 
-    // Clamp only what overflows. `truncateToWidth` returns a fitting line
-    // unchanged, but reaching that answer takes its slow grapheme path on any
-    // line with an escape or non-ASCII character — every themed line — so on a
-    // styled transcript this map was most of the render. Plain short lines are
-    // settled by the regex; the rest by `visibleWidth`, which is cached.
-    return lines.map(l =>
-      (l.length <= width && PRINTABLE_ASCII.test(l)) || visibleWidth(l) <= width ? l : truncateToWidth(l, width));
+  /** One message's lines, clamped to `width`. Empty when the message shows nothing. */
+  private messageLines(
+    msg: AgentSession["messages"][number],
+    results: Map<string, ToolResultMessage>,
+    width: number,
+    mode: ViewerMarkdownMode,
+  ): string[] {
+    const th = this.theme;
+    const lines: string[] = [];
+    if (msg.role === "user") {
+      const text = typeof msg.content === "string"
+        ? msg.content
+        : extractText(msg.content);
+      if (!text.trim()) return lines;
+      lines.push(th.fg("accent", "[User]"));
+      for (const line of wrapTextWithAnsi(text.trim(), width)) {
+        lines.push(line);
+      }
+    } else if (msg.role === "assistant") {
+      const textParts: string[] = [];
+      const thinking: Extract<(typeof msg.content)[number], { type: "thinking" }>[] = [];
+      const toolCalls: Extract<(typeof msg.content)[number], { type: "toolCall" }>[] = [];
+      for (const c of msg.content) {
+        if (c.type === "text" && c.text) textParts.push(c.text);
+        else if (c.type === "thinking" && !this.hideThinking && !c.redacted && c.thinking.trim()) thinking.push(c);
+        else if (c.type === "toolCall") toolCalls.push(c);
+      }
+      lines.push(th.bold("[Assistant]"));
+      // Styled as pi's own transcript styles it: italic, in `thinkingText`.
+      const thinkingStyle: DefaultTextStyle = { color: t => th.fg("thinkingText", t), italic: true };
+      for (const block of thinking) {
+        const text = block.thinking.trim();
+        lines.push(...(mode === "off"
+          ? this.rawLines(text, width, thinkingStyle)
+          : this.markdownLines(block, text, width, thinkingStyle)));
+      }
+      if (thinking.length > 0 && textParts.length > 0) lines.push("");
+      if (textParts.length > 0) {
+        const text = textParts.join("\n").trim();
+        lines.push(...(mode === "off"
+          ? this.rawLines(text, width)
+          : this.markdownLines(msg, text, width)));
+      }
+      for (const call of toolCalls) {
+        // A blank line sets each call apart from the text or call above it;
+        // straight under the role label there is nothing to separate.
+        if (lines.length > 1) lines.push("");
+        lines.push(...this.toolBlockLines(call.id, call.name, call.arguments, results.get(call.id), width));
+      }
+    } else if (msg.role === "toolResult") {
+      // Orphaned from its call (e.g. compacted away): the result alone.
+      const output = this.toolOutputLines(msg, extractText(msg.content).trim(), previewsTail(msg.toolName), width, "");
+      if (output.length === 0) return lines;
+      lines.push(th.fg("dim", "[Result]"));
+      lines.push(...output);
+    } else if ((msg as any).role === "bashExecution") {
+      const bash = msg as any;
+      lines.push(truncateToWidth(th.fg("muted", `  $ ${bash.command}`), width));
+      // Never Markdown: command output is the one thing here that is
+      // definitionally not authored as Markdown.
+      lines.push(...this.toolOutputLines(undefined, bash.output?.trim() ?? "", true, width, ""));
+    }
+    return lines.map(l => clampLine(l, width));
   }
 
   /** One tool call: header, arguments, then its result — or its live output while it runs. */
@@ -920,7 +993,7 @@ export class ConversationViewer implements Component, Focusable {
     toolCallId: string,
     toolName: string,
     args: Record<string, unknown> | undefined,
-    result: Extract<AgentSession["messages"][number], { role: "toolResult" }> | undefined,
+    result: ToolResultMessage | undefined,
     width: number,
   ): string[] {
     const timing = this.record.toolTimings?.get(toolCallId);

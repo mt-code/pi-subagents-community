@@ -236,6 +236,79 @@ export function makeStreamingSession(n: number, { thinkingChars = 0, textChars =
   return session;
 }
 
+/** `chars` of shell-like output: short numbered lines, as a test runner or build prints. */
+function shellOutput(chars: number, tag: string): string {
+  const lines: string[] = [];
+  let size = 0;
+  for (let i = 0; size < chars; i++) {
+    const line = `[${tag}] step ${i}: compiled src/module-${i % 97}.ts in ${i % 13}ms`;
+    lines.push(line);
+    size += line.length + 1;
+  }
+  return lines.join("\n");
+}
+
+/**
+ * A transcript of `n` messages whose tool calls are all `bash` with large
+ * output, ending in one bash call still running — the state an agent is in
+ * while a noisy build or test run streams.
+ *
+ * Every finished result is `resultChars` long (past the viewer's 16 KB cap by
+ * default), and every call has a real `toolCallId` so the viewer nests each
+ * result inside its call's block, as it does in production.
+ *
+ * `update(i)` fires one `tool_execution_update` carrying the full output tail
+ * so far, as pi's bash tool does every 100 ms. The text flips its last
+ * character rather than growing, so every sample measures the same work.
+ */
+export function makeToolStreamingSession(n: number, { resultChars = 20_000, partialChars = 50_000 } = {}) {
+  const messages: any[] = [];
+  for (let i = 0; i < n; i++) {
+    const slot = i % 3;
+    const id = `call-${i - slot}`;
+    if (slot === 0) {
+      messages.push({ role: "user", content: `Message ${i}: ${PARAGRAPH}` });
+    } else if (slot === 1) {
+      messages.push({
+        role: "assistant",
+        content: [
+          { type: "text", text: `Running the build (message ${i}).` },
+          { type: "toolCall", id, name: "bash", arguments: { command: `npm run build -- --step ${i}` } },
+        ],
+      });
+    } else {
+      messages.push({
+        role: "toolResult",
+        toolCallId: id,
+        toolName: "bash",
+        content: [{ type: "text", text: shellOutput(resultChars, `result ${i}`) }],
+      });
+    }
+  }
+  messages.push({
+    role: "assistant",
+    content: [{ type: "toolCall", id: "live", name: "bash", arguments: { command: "npm test" } }],
+  });
+  let listener: (event: unknown) => void = () => {};
+  const partial = shellOutput(partialChars, "live");
+  return {
+    messages,
+    subscribe: (fn: (event: unknown) => void) => {
+      listener = fn;
+      return () => {};
+    },
+    update: (i: number) => listener({
+      type: "tool_execution_update",
+      toolCallId: "live",
+      toolName: "bash",
+      partialResult: { content: [{ type: "text", text: partial.slice(0, -1) + (i % 2 ? "a" : "b") }] },
+    }),
+    state: {} as { streamingMessage?: unknown },
+    dispose: () => {},
+    getSessionStats: () => ({ tokens: { input: 0, output: 0, cacheWrite: 0 } }),
+  } as any;
+}
+
 // ---- Render harnesses ----
 
 /**
