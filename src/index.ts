@@ -1104,8 +1104,8 @@ export default function (pi: ExtensionAPI) {
     }
 
     try {
-      // Nothing else to pass: runAgent resolves model, thinking and max turns
-      // from the agent's own config when the spawn omits them, and the
+      // Nothing else to pass: runAgent resolves model, thinking, max turns and
+      // `isolated` from the agent's own config when the spawn omits them, and the
       // manager's onStart/onComplete callbacks own the widget, the fleet list
       // and the completion notification — the same contract the scheduler and
       // cross-extension RPC spawns run under.
@@ -2101,9 +2101,9 @@ Terse command-style prompts produce shallow, generic work.
           }
         };
 
-        // A throw here means the agent never started. Let it out: pi marks a
-        // tool call failed only when execute throws, and a returned message
-        // reads to the model as a subagent that ran and reported this (#179).
+        // A throw here means the agent never started. Let it out: pi marks the
+        // tool call failed, whereas a returned message reads to the model as a
+        // subagent that ran and reported this (#179).
         id = manager.spawn(pi, ctx, subagentType, params.prompt, {
           description: params.description,
           name: params.name as string | undefined,
