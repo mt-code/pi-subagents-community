@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Agent `.output` transcripts no longer repeat the prompt or record pi's system messages** (from [#384](https://github.com/tintinweb/pi-subagents/pull/384)). pi 1.x puts a `system` message ahead of the first user message and adds one whenever the tool set changes, so the spawn prompt was written twice and each system message landed as a `toolResult` entry. The stream now starts after the first user message and skips system messages.
+- **The FleetView list no longer sits flush against pi's footer** ([#351](https://github.com/tintinweb/pi-subagents/issues/351) — thanks [@KKinsz](https://github.com/KKinsz)). pi places below-editor widgets directly on its status bar, so the last agent row ran into the model/context line. The list now ends with a blank line.
+- **FleetView arrow keys work when another extension replaces the prompt editor** ([#374](https://github.com/tintinweb/pi-subagents/issues/374) — thanks [@BarrMan](https://github.com/BarrMan)). The list only handled keys while an `Editor` subclass had focus, so an editor installed via `ui.setEditorComponent` that does not extend `Editor` left `↓`/`←` dead. Any focused component with `getText`/`setText` now counts as the editor.
+- **`SubagentWorkflow` honours an agent file's `isolated: true`** ([#339](https://github.com/tintinweb/pi-subagents/pull/339) — thanks [@ajaynomics](https://github.com/ajaynomics)). The workflow host never forwarded the flag, so script-spawned children of a hermetic agent loaded every host extension and its MCP and web tools.
+- **An agent file's `isolated:` now holds on every spawn path.** Direct-mode and fallback `@handle` mentions, reclaimed agents, and RPC spawns that omitted `isolated` ran an `isolated: true` agent with every host extension loaded. The file now wins everywhere; an RPC caller's `isolated: false` no longer overrides a file's `true`.
+- **An agent file's `isolation:` now holds on mention and RPC spawns.** Those paths ran an `isolation: worktree` agent in the main checkout, and an RPC caller's `"worktree"` overrode a file's `isolation: off`. The file now wins there, and the widget's `worktree` tag shows for every worktree agent. Workflow `agent()` calls are unchanged: as in Claude Code, only the script's option decides. An agent whose file says `worktree` now fails to start outside a git repo instead of running in place.
+
 ## [0.20.1] - 2026-10-09
 
 ### Fixed

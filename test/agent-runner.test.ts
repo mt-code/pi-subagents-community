@@ -792,7 +792,6 @@ function makeAgentConfig(overrides: Record<string, unknown> = {}) {
     promptMode: "replace" as const,
     inheritContext: false,
     runInBackground: false,
-    isolated: false,
     ...overrides,
   };
 }
@@ -2361,6 +2360,7 @@ describe("agent-runner ext: tool selectors", () => {
     builtinToolNames: string[];
     extSelectors?: string[];
     disallowedTools?: string[];
+    isolated?: boolean;
   }) {
     vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: o.extensions }));
     vi.mocked(getAgentConfig).mockReturnValueOnce(
@@ -2368,6 +2368,7 @@ describe("agent-runner ext: tool selectors", () => {
         extensions: o.extensions,
         extSelectors: o.extSelectors,
         disallowedTools: o.disallowedTools,
+        isolated: o.isolated,
       }),
     );
     vi.mocked(getToolNamesForType).mockReturnValueOnce(o.builtinToolNames);
@@ -2507,6 +2508,48 @@ describe("agent-runner ext: tool selectors", () => {
     expect(tools).toContain("read");
     expect(tools).not.toContain("foo_tool");
     expect(lastLoaderOpts().noExtensions).toBe(true);
+  });
+
+  // Frontmatter is authoritative (README "Frontmatter is authoritative"): the
+  // agent file's `isolated` holds on every spawn path, not only the ones that
+  // resolve it before calling the runner. `@handle` mentions and RPC spawns
+  // pass no `isolated` at all.
+  describe("the agent file's `isolated` wins over the spawn option", () => {
+    function run(fileIsolated: boolean | undefined, optionIsolated: boolean | undefined) {
+      setupExtAgent({ extensions: true, builtinToolNames: ["read"], extSelectors: ["ext:foo"], isolated: fileIsolated });
+      withExtensions({ "/ext/foo.ts": ["foo_tool"] });
+      const { session } = createSession("OK");
+      createAgentSession.mockResolvedValue({ session });
+      return runAgent(ctx, "Explore", "go", { pi, isolated: optionIsolated });
+    }
+
+    it("isolated: true in the file applies when the spawn omits it", async () => {
+      await run(true, undefined);
+
+      expect(lastToolsPassed()).not.toContain("foo_tool");
+      expect(lastLoaderOpts().noExtensions).toBe(true);
+    });
+
+    it("isolated: true in the file overrides a spawn's isolated: false", async () => {
+      await run(true, false);
+
+      expect(lastToolsPassed()).not.toContain("foo_tool");
+      expect(lastLoaderOpts().noExtensions).toBe(true);
+    });
+
+    it("isolated: false in the file overrides a spawn's isolated: true", async () => {
+      await run(false, true);
+
+      expect(lastToolsPassed()).toContain("foo_tool");
+      expect(lastLoaderOpts().noExtensions).toBe(false);
+    });
+
+    it("the spawn option decides when the file leaves isolated unset", async () => {
+      await run(undefined, true);
+
+      expect(lastToolsPassed()).not.toContain("foo_tool");
+      expect(lastLoaderOpts().noExtensions).toBe(true);
+    });
   });
 
   it("ext: composes with a path-loaded extension via its canonical name", async () => {
