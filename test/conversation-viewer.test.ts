@@ -835,6 +835,61 @@ describe("ConversationViewer", () => {
       expect(out).toContain("orphan output");
     });
 
+    it("rebuilds only the running call's block on a session event", () => {
+      const session = mockSession([
+        call("c1", "read", { path: "a" }), res("c1", "read", "done"),
+        call("c2", "bash", { command: "make" }),
+      ]);
+      const viewer = viewerFor([], { session });
+      content(viewer);
+      const built = vi.spyOn(viewer as any, "messageLines");
+
+      session.emit({ type: "tool_execution_update", toolCallId: "c2", toolName: "bash", args: {}, partialResult: { content: [{ type: "text", text: "building..." }] } });
+      expect(content(viewer)).toContain("    building...");
+
+      expect(built).toHaveBeenCalledTimes(1);
+      expect(built.mock.calls[0][0]).toBe(session.messages[2]);
+    });
+
+    it("shows a result that lands after its call was rendered", () => {
+      const messages: any[] = [call("c1", "bash", { command: "make" })];
+      const session = mockSession(messages);
+      const viewer = viewerFor([], { session });
+      expect(content(viewer).join("\n")).not.toContain("compiled");
+
+      messages.push(res("c1", "bash", "compiled", true));
+      session.emit();
+      const raw = (viewer as any).buildContentLines(76) as string[];
+
+      expect(raw.map(untag)).toContain("    compiled");
+      expect(raw.find(l => l.includes("[Tool Bash"))).toContain("<error>");
+    });
+
+    it("re-renders a finished message that pi replaced in place", () => {
+      const messages: any[] = [call("c1", "read", { path: "a" }), res("c1", "read", "before")];
+      const session = mockSession(messages);
+      const viewer = viewerFor([], { session });
+      expect(content(viewer)).toContain("    before");
+
+      // What AgentSession._replaceMessageInPlace does on a `message_end` replacement.
+      const target = messages[1];
+      for (const key of Object.keys(target)) delete target[key];
+      Object.assign(target, res("c1", "read", "after"));
+      session.emit();
+
+      expect(content(viewer)).toContain("    after");
+      expect(content(viewer)).not.toContain("    before");
+    });
+
+    it("re-renders a finished message at a new width", () => {
+      const viewer = viewerFor([call("c1", "read", { path: "f" }), res("c1", "read", "word ".repeat(30).trim())]);
+      const wide = (viewer as any).buildContentLines(76) as string[];
+      const narrow = (viewer as any).buildContentLines(30) as string[];
+
+      assertAllLinesFit(narrow, 30);
+      expect(narrow.length).toBeGreaterThan(wide.length);
+    });
+
     it("re-renders every second while a tool runs, and stops once disposed", () => {
       vi.useFakeTimers();
       try {

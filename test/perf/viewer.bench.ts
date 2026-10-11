@@ -22,7 +22,7 @@
  */
 import { bench, describe } from "vitest";
 import { ConversationViewer } from "../../src/ui/conversation-viewer.js";
-import { makeSession, makeStreamingSession, mountViewer, styledPerfTheme } from "../helpers/perf-fixtures.js";
+import { makeRecord, makeSession, makeStreamingSession, makeToolStreamingSession, mountViewer, NOW, styledPerfTheme } from "../helpers/perf-fixtures.js";
 
 const SIZES = [50, 500, 5000];
 
@@ -157,6 +157,32 @@ describe("ConversationViewer.render — spinner frame (no event)", () => {
     const viewer = mountViewer(ConversationViewer, makeStreamingSession(n, { thinkingChars: 2_000 }), undefined, undefined, undefined, { activity: idle });
     viewer.render(120);
     bench(`${n} messages`, () => {
+      viewer.render(120);
+    });
+  }
+});
+
+// ---- Tool streaming ----
+//
+// A bash call streaming output into a transcript of earlier bash results: pi
+// sends one `tool_execution_update` per 100 ms, and each sample is one update
+// followed by the frame it causes. Past ~100 ms per sample the viewer can no
+// longer keep up, and input waits behind the rebuilds.
+describe("ConversationViewer.render — tool streaming: update + render", () => {
+  const running = {
+    activeTools: new Map([["live", "bash"]]),
+    toolUses: 0,
+    turnCount: 1,
+    responseText: "",
+  };
+  for (const n of SIZES) {
+    const session = makeToolStreamingSession(n);
+    const record = makeRecord(0, { toolTimings: new Map([["live", { startedAt: NOW }]]) });
+    const viewer = mountViewer(ConversationViewer, session, record, undefined, styledPerfTheme, { activity: running });
+    viewer.render(120);
+    let i = 0;
+    bench(`${n} messages`, () => {
+      session.update(i++);
       viewer.render(120);
     });
   }
