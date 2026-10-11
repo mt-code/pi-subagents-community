@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.2] - 2026-10-11
+
 ### Changed
 - **The conversation viewer always shows a bash command in full.** A multi-line command was cut to its first line until tool output was expanded, so reading what an agent ran meant expanding every result too. Bash commands and the file tools' paths now always show whole and wrapped; only the output collapses. Other tools' JSON arguments still collapse to one line, since they can carry an entire prompt.
 - **Tool calls in the conversation viewer have a blank line above them.** A `[Tool …]` header sat directly under the assistant's thinking or text, and under the previous call, so calls were hard to pick out. Each call now gets a blank line, except one that directly follows the `[Assistant]` label.
