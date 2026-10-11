@@ -967,6 +967,9 @@ export class ConversationViewer implements Component, Focusable {
           : this.markdownLines(msg, text, width)));
       }
       for (const call of toolCalls) {
+        // A blank line sets each call apart from the text or call above it;
+        // straight under the role label there is nothing to separate.
+        if (lines.length > 1) lines.push("");
         lines.push(...this.toolBlockLines(call.id, call.name, call.arguments, results.get(call.id), width));
       }
     } else if (msg.role === "toolResult") {

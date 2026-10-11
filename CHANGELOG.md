@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **The conversation viewer always shows a bash command in full.** A multi-line command was cut to its first line until tool output was expanded, so reading what an agent ran meant expanding every result too. Bash commands and the file tools' paths now always show whole and wrapped; only the output collapses. Other tools' JSON arguments still collapse to one line, since they can carry an entire prompt.
+- **Tool calls in the conversation viewer have a blank line above them.** A `[Tool …]` header sat directly under the assistant's thinking or text, and under the previous call, so calls were hard to pick out. Each call now gets a blank line, except one that directly follows the `[Assistant]` label.
 
 ### Fixed
 - **Agent `.output` transcripts no longer repeat the prompt or record pi's system messages** (from [#384](https://github.com/tintinweb/pi-subagents/pull/384)). pi 1.x puts a `system` message ahead of the first user message and adds one whenever the tool set changes, so the spawn prompt was written twice and each system message landed as a `toolResult` entry. The stream now starts after the first user message and skips system messages.

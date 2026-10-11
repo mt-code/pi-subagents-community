@@ -809,6 +809,22 @@ describe("ConversationViewer", () => {
       expect(out).toContain("    … 7 earlier lines hidden · ctrl+o to expand");
     });
 
+    it("sets each call apart from the text and calls above it, but not from the role label", () => {
+      const out = content(viewerFor([{
+        role: "assistant",
+        content: [
+          { type: "text", text: "Checking." },
+          { type: "toolCall", id: "c1", name: "read", arguments: { path: "a" } },
+          { type: "toolCall", id: "c2", name: "read", arguments: { path: "b" } },
+        ],
+      }, call("c3", "read", { path: "c" })]));
+
+      expect(out.slice(0, 8).map(l => l.trimEnd())).toEqual([
+        "[Assistant]", "Checking.", "", "  [Tool Read]", "    a", "", "  [Tool Read]", "    b",
+      ]);
+      expect(out.slice(-3)).toEqual(["[Assistant]", "  [Tool Read]", "    c"]);
+    });
+
     it("wraps a bash command wider than the viewer instead of cutting it", () => {
       const command = `echo ${"word ".repeat(30)}end`;
       const out = content(viewerFor([call("c1", "bash", { command })]));
